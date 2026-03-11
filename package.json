@@ -1,0 +1,8 @@
+{
+  "name": "qunce-root",
+  "private": true,
+  "version": "0.1.0",
+  "devDependencies": {
+    "pm2": "^6.0.8"
+  }
+}

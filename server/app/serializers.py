@@ -25,6 +25,22 @@ def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(chat)
 
 
+def persona_summary_payload(persona: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "persona_id": persona["persona_id"],
+        "name": persona["name"],
+        "role_summary": persona.get("role_summary", ""),
+        "status": persona.get("status", "active"),
+        "node_id": persona.get("node_id", ""),
+        "node_name": persona.get("node_name", ""),
+        "workspace_dir": persona.get("workspace_dir", ""),
+        "system_prompt": persona.get("system_prompt", ""),
+        "agent_key": persona.get("agent_key", "codex-general"),
+        "agent_label": persona.get("agent_label", "通用协作"),
+        "model_provider": persona.get("model_provider", "codex"),
+    }
+
+
 def node_summary_payload(node: dict[str, Any]) -> dict[str, Any]:
     status = str(node.get("status", "offline"))
     status_label = {
@@ -47,6 +63,8 @@ def node_summary_payload(node: dict[str, Any]) -> dict[str, Any]:
         "platform": node.get("platform"),
         "arch": node.get("arch"),
         "last_seen_at": node.get("last_seen_at"),
+        "running_turns": node.get("running_turns", 0),
+        "worker_count": node.get("worker_count", 0),
     }
 
 

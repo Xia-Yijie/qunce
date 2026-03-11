@@ -6,7 +6,13 @@ from flask import abort, jsonify, request, send_from_directory
 
 from server.app.config import settings
 from server.app.runtime import DIST_DIR, app
-from server.app.serializers import chat_snapshot_payload, chat_summary_payload, meta_payload, node_summary_payload
+from server.app.serializers import (
+    chat_snapshot_payload,
+    chat_summary_payload,
+    meta_payload,
+    node_summary_payload,
+    persona_summary_payload,
+)
 from server.app.state import state
 from server.app.services.agents import agent_connections
 from server.app.services.events import broadcast_node_updates, update_node
@@ -25,7 +31,7 @@ def meta() -> Any:
 
 @app.get("/api/chats")
 def chats() -> Any:
-    return jsonify([chat_summary_payload(chat) for chat in state.chats.values()])
+    return jsonify([chat_summary_payload(chat) for chat in state.list_chats()])
 
 
 @app.get("/api/chats/<chat_id>/snapshot")
@@ -54,7 +60,49 @@ def create_chat_message(chat_id: str) -> Any:
 
 @app.get("/api/personas")
 def personas() -> Any:
-    return jsonify(state.list_personas())
+    return jsonify([persona_summary_payload(persona) for persona in state.list_personas()])
+
+
+@app.post("/api/personas")
+def create_persona() -> Any:
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", "")).strip()
+    node_id = str(payload.get("node_id", "")).strip()
+    workspace_dir = str(payload.get("workspace_dir", "")).strip()
+    role_summary = str(payload.get("role_summary", "")).strip()
+    system_prompt = str(payload.get("system_prompt", "")).strip()
+    agent_key = str(payload.get("agent_key", "")).strip()
+    agent_label = str(payload.get("agent_label", "")).strip()
+
+    if not name:
+        abort(400, "persona_name_required")
+    if not node_id:
+        abort(400, "node_id_required")
+    if not workspace_dir:
+        abort(400, "workspace_dir_required")
+    if not role_summary:
+        abort(400, "role_summary_required")
+    if not agent_key:
+        abort(400, "agent_key_required")
+
+    node = state.get_node(node_id)
+    if node is None:
+        abort(404, "node_not_found")
+
+    persona = state.add_persona(
+        {
+            "name": name,
+            "node_id": node_id,
+            "node_name": node.get("remark") or node.get("hostname") or node.get("name") or node_id,
+            "workspace_dir": workspace_dir,
+            "role_summary": role_summary,
+            "system_prompt": system_prompt,
+            "agent_key": agent_key,
+            "agent_label": agent_label or agent_key,
+            "model_provider": "codex",
+        }
+    )
+    return jsonify(persona_summary_payload(persona)), 201
 
 
 @app.get("/api/nodes")

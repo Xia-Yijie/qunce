@@ -410,6 +410,17 @@ a {
   padding: 14px 12px 10px;
 }
 
+.directory-toolbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+}
+
+.friend-create-button {
+  border-radius: 999px;
+  box-shadow: none;
+}
+
 .directory-search {
   height: 30px;
   border-radius: 6px;
@@ -752,6 +763,70 @@ a {
   justify-content: flex-end;
   gap: 10px;
   padding-top: 6px;
+}
+
+.friend-wizard {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.friend-wizard-panel {
+  min-height: 244px;
+  padding: 8px 2px;
+}
+
+.friend-wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wizard-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wizard-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.wizard-agent-card {
+  border: 1px solid rgba(31, 35, 41, 0.1);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.wizard-agent-card:hover,
+.wizard-agent-card.active {
+  border-color: rgba(39, 110, 241, 0.28);
+  box-shadow: 0 10px 24px rgba(39, 110, 241, 0.08);
+  transform: translateY(-1px);
+}
+
+.wizard-agent-title {
+  color: #2f343a;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.wizard-agent-summary {
+  color: #7f868f;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 @media (max-width: 1200px) {

@@ -10,13 +10,15 @@ import {
   Layout,
   List,
   Modal,
+  Select,
   Space,
   Spin,
+  Steps,
   Typography,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 type ChatSummary = {
   chat_id: string;
@@ -40,6 +42,8 @@ type NodeSummary = {
   platform?: string;
   arch?: string;
   last_seen_at?: string;
+  running_turns?: number;
+  worker_count?: number;
 };
 
 type PersonaSummary = {
@@ -47,6 +51,23 @@ type PersonaSummary = {
   name: string;
   role_summary: string;
   status: string;
+  node_id: string;
+  node_name: string;
+  workspace_dir: string;
+  system_prompt: string;
+  agent_key: string;
+  agent_label: string;
+  model_provider: string;
+};
+
+type CreatePersonaPayload = {
+  name: string;
+  node_id: string;
+  workspace_dir: string;
+  role_summary: string;
+  system_prompt: string;
+  agent_key: string;
+  agent_label: string;
 };
 
 type ChatSnapshot = {
@@ -67,10 +88,16 @@ type ChatSnapshot = {
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error(`request failed: ${url}`);
+    throw new Error((await response.text()) || `request failed: ${url}`);
   }
   return response.json() as Promise<T>;
 };
+
+const agentOptions = [
+  { key: "codex-general", label: "通用协作", summary: "适合日常协作、执行和跟进事项。" },
+  { key: "codex-builder", label: "实现型", summary: "偏向直接落地代码、推进改动。" },
+  { key: "codex-analyst", label: "分析型", summary: "偏向梳理信息、拆解问题和方案。" },
+];
 
 const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
@@ -84,6 +111,12 @@ const api = {
   rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
   chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
+  createPersona: (payload: CreatePersonaPayload) =>
+    fetchJson<PersonaSummary>("/api/personas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
   sendMessage: (chatId: string, content: string) =>
     fetchJson<{ ok: boolean }>(`/api/chats/${chatId}/messages`, {
       method: "POST",
@@ -345,7 +378,7 @@ const QuickCreateMenu = () => {
             return;
           }
           if (key === "add-friend") {
-            navigate("/friends");
+            navigate("/friends?create=friend");
           }
         },
       }}
@@ -404,6 +437,7 @@ const DirectoryLayout = ({
   onSelect,
   renderRow,
   detail,
+  toolbarActions,
 }: {
   title: string;
   sections: Array<{ key: string; title: string; defaultCollapsed?: boolean; items: Array<{ id: string }> }>;
@@ -411,6 +445,7 @@ const DirectoryLayout = ({
   onSelect: (id: string) => void;
   renderRow: (id: string, active: boolean) => React.ReactNode;
   detail: React.ReactNode;
+  toolbarActions?: React.ReactNode;
 }) => {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(sections.map((section) => [section.key, section.defaultCollapsed ?? false])),
@@ -438,6 +473,7 @@ const DirectoryLayout = ({
             <div className="conversation-search">搜索</div>
             <QuickCreateMenu />
           </div>
+          {toolbarActions ? <div className="directory-toolbar-actions">{toolbarActions}</div> : null}
         </div>
         <div className="directory-sections">
           {sections.map((section) => {
@@ -674,11 +710,169 @@ const SetupPage = () => {
   );
 };
 
+const FriendWizard = ({
+  open,
+  nodes,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  nodes: NodeSummary[];
+  onClose: () => void;
+  onCreated: (persona: PersonaSummary) => void;
+}) => {
+  const { message } = AntApp.useApp();
+  const approvedNodes = useMemo(() => nodes.filter((node) => node.approved), [nodes]);
+  const [step, setStep] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<CreatePersonaPayload>({
+    name: "",
+    node_id: "",
+    workspace_dir: "",
+    role_summary: "",
+    system_prompt: "",
+    agent_key: agentOptions[0].key,
+    agent_label: agentOptions[0].label,
+  });
+
+  useEffect(() => {
+    if (!open) {
+      setStep(0);
+      setSaving(false);
+      setDraft({
+        name: "",
+        node_id: "",
+        workspace_dir: "",
+        role_summary: "",
+        system_prompt: "",
+        agent_key: agentOptions[0].key,
+        agent_label: agentOptions[0].label,
+      });
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!draft.node_id && approvedNodes[0]) {
+      setDraft((current) => ({ ...current, node_id: approvedNodes[0].node_id }));
+    }
+  }, [approvedNodes, draft.node_id]);
+
+  const selectedAgent = agentOptions.find((item) => item.key === draft.agent_key) ?? agentOptions[0];
+  const canContinue =
+    (step === 0 && Boolean(draft.name.trim()) && Boolean(draft.node_id)) ||
+    (step === 1 && Boolean(draft.workspace_dir.trim())) ||
+    (step === 2 && Boolean(draft.role_summary.trim())) ||
+    step === 3;
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      const persona = await api.createPersona({
+        ...draft,
+        name: draft.name.trim(),
+        workspace_dir: draft.workspace_dir.trim(),
+        role_summary: draft.role_summary.trim(),
+        system_prompt: draft.system_prompt.trim(),
+        agent_label: selectedAgent.label,
+      });
+      message.success(`已创建朋友「${persona.name}」`);
+      onCreated(persona);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "创建失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onCancel={() => !saving && onClose()} footer={null} centered width={640} title="添加朋友" destroyOnHidden>
+      <div className="friend-wizard">
+        <Steps current={step} size="small" items={[{ title: "基本信息" }, { title: "工作目录" }, { title: "人设" }, { title: "智能体" }]} />
+        <div className="friend-wizard-panel">
+          {step === 0 ? (
+            <div className="wizard-field-stack">
+              <Input
+                placeholder="名称，例如：产品搭子"
+                value={draft.name}
+                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+              />
+              <Select
+                placeholder="选择一个已接收节点"
+                value={draft.node_id || undefined}
+                onChange={(value) => setDraft((current) => ({ ...current, node_id: value }))}
+                options={approvedNodes.map((node) => ({
+                  value: node.node_id,
+                  label: `${getNodeDisplayName(node)} · ${node.status_label}`,
+                }))}
+                notFoundContent="还没有可用节点"
+              />
+            </div>
+          ) : null}
+          {step === 1 ? (
+            <div className="wizard-field-stack">
+              <Input
+                placeholder="工作目录，例如：C:\\Users\\NINGMEI\\Projects\\demo"
+                value={draft.workspace_dir}
+                onChange={(event) => setDraft((current) => ({ ...current, workspace_dir: event.target.value }))}
+              />
+            </div>
+          ) : null}
+          {step === 2 ? (
+            <div className="wizard-field-stack">
+              <Input
+                placeholder="角色简介，例如：负责把需求整理成可执行计划"
+                value={draft.role_summary}
+                onChange={(event) => setDraft((current) => ({ ...current, role_summary: event.target.value }))}
+              />
+              <Input.TextArea
+                autoSize={{ minRows: 4, maxRows: 8 }}
+                placeholder="详细人设"
+                value={draft.system_prompt}
+                onChange={(event) => setDraft((current) => ({ ...current, system_prompt: event.target.value }))}
+              />
+            </div>
+          ) : null}
+          {step === 3 ? (
+            <div className="wizard-agent-grid">
+              {agentOptions.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`wizard-agent-card ${draft.agent_key === item.key ? "active" : ""}`}
+                  onClick={() => setDraft((current) => ({ ...current, agent_key: item.key, agent_label: item.label }))}
+                >
+                  <span className="wizard-agent-title">{item.label}</span>
+                  <span className="wizard-agent-summary">{item.summary}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="friend-wizard-footer">
+          <Button onClick={() => (step === 0 ? onClose() : setStep((current) => current - 1))} disabled={saving}>
+            {step === 0 ? "取消" : "上一步"}
+          </Button>
+          {step < 3 ? (
+            <Button type="primary" disabled={!canContinue || saving} onClick={() => setStep((current) => current + 1)}>
+              下一步
+            </Button>
+          ) : (
+            <Button type="primary" loading={saving} onClick={() => void submit()} disabled={approvedNodes.length === 0}>
+              完成
+            </Button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 type DirectoryEntry =
   | ({ kind: "agent"; id: string } & PersonaSummary)
   | ({ kind: "node"; id: string } & NodeSummary);
 
 const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
@@ -728,6 +922,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     () => nodes.find((node) => node.node_id === pendingNodeId) ?? null,
     [nodes, pendingNodeId],
   );
+  const openCreate = searchParams.get("create") === "friend";
 
   const openAcceptDialog = (node: NodeSummary) => {
     setPendingNodeId(node.node_id);
@@ -787,6 +982,18 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     });
   };
 
+  const closeCreateDialog = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleCreatedPersona = (persona: PersonaSummary) => {
+    queryClient.setQueryData(["personas"], (previous: PersonaSummary[] | undefined) => [persona, ...(previous ?? [])]);
+    setSelectedEntryId(`agent:${persona.persona_id}`);
+    closeCreateDialog();
+  };
+
   return (
     <>
       <DirectoryLayout
@@ -794,6 +1001,13 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         sections={sections}
         selectedId={selectedEntry?.id ?? null}
         onSelect={setSelectedEntryId}
+        toolbarActions={
+          defaultKind === "agent" ? (
+            <Button className="friend-create-button" type="primary" onClick={() => setSearchParams({ create: "friend" })}>
+              添加朋友
+            </Button>
+          ) : undefined
+        }
         renderRow={(id) => {
           const entry = entries.find((item) => item.id === id);
           if (!entry) return null;
@@ -902,6 +1116,10 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                       {selectedEntry.platform ?? "-"} / {selectedEntry.arch ?? "-"}
                     </span>
                   </div>
+                  <div className="profile-row">
+                    <span className="profile-label">运行中任务</span>
+                    <span>{selectedEntry.running_turns ?? 0}</span>
+                  </div>
                 </div>
                 {selectedEntry.can_accept ? (
                   <div className="profile-actions">
@@ -933,11 +1151,19 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">运行节点</span>
-                    <span>后续接入</span>
+                    <span>{selectedEntry.node_name || selectedEntry.node_id || "-"}</span>
+                  </div>
+                  <div className="profile-row">
+                    <span className="profile-label">工作目录</span>
+                    <span>{selectedEntry.workspace_dir || "-"}</span>
+                  </div>
+                  <div className="profile-row">
+                    <span className="profile-label">详细人设</span>
+                    <span>{selectedEntry.system_prompt || "-"}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">模型</span>
-                    <span>codex</span>
+                    <span>{selectedEntry.agent_label || selectedEntry.model_provider || "codex"}</span>
                   </div>
                 </div>
               </div>
@@ -986,6 +1212,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
           </div>
         </div>
       </Modal>
+      <FriendWizard open={openCreate} nodes={nodes} onClose={closeCreateDialog} onCreated={handleCreatedPersona} />
     </>
   );
 };

@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "群策"
     app_version: str = "0.1.0"
     default_pair_token: str = "dev-pair-token"
+    server_data_dir: str = "~/.qunce"
 
     model_config = SettingsConfigDict(
         env_prefix="QUNCE_",

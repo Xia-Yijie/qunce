@@ -12,7 +12,7 @@ console-build = { cmd = "pnpm build", cwd = "console" }
 server = { cmd = "sh -lc 'pnpm exec pm2 describe qunce-server >/dev/null 2>&1 && pnpm exec pm2 restart pm2.config.cjs --only qunce-server || pnpm exec pm2 start pm2.config.cjs --only qunce-server'", cwd = ".", depends-on = ["pm2-install", "console-install", "console-build"] }
 server-stop = { cmd = "pnpm exec pm2 delete qunce-server", cwd = "." }
 server-status = { cmd = "pnpm exec pm2 status qunce-server", cwd = "." }
-agent-run = { cmd = "CGO_ENABLED=0 go run ./cmd/agentd 127.0.0.1:8000", cwd = "agent" }
+agent-run = { cmd = "CGO_ENABLED=0 go run ./cmd/agentd --link 127.0.0.1:8000 --hello \"你好，我想加入群策。\"", cwd = "agent" }
 agent-build = { cmd = "mkdir -p ./bin && CGO_ENABLED=0 go build -o ./bin/agentd ./cmd/agentd", cwd = "agent" }
 
 [dependencies]

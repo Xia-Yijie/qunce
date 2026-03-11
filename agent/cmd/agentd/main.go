@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,9 +45,18 @@ type agentConfig struct {
 	PairToken  string
 	NodeID     string
 	NodeName   string
+	Hostname   string
+	Hello      string
 	MaxWorker  int
 	WorkDir    string
 	Store      *localStore
+}
+
+type agentRuntime struct {
+	conn     *websocket.Conn
+	cfg      agentConfig
+	logger   *slog.Logger
+	sendLock sync.Mutex
 }
 
 func main() {
@@ -72,17 +83,32 @@ func loadConfig(args []string) (agentConfig, error) {
 	if err != nil {
 		hostname = "local-agent"
 	}
+	defaultNodeName := firstNonEmpty(os.Getenv("USER"), "agent") + "@" + hostname
 
-	if len(args) < 1 || args[0] == "" {
-		return agentConfig{}, errors.New("missing server address, expected host:port")
+	fs := flag.NewFlagSet("agentd", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	link := fs.String("link", "", "server host:port")
+	workspace := fs.String("workspace", "~/.qunce", "agent workspace")
+	hello := fs.String("hello", "", "greeting message")
+	if err := fs.Parse(args); err != nil {
+		return agentConfig{}, err
+	}
+	if fs.NArg() > 0 {
+		return agentConfig{}, errors.New("unexpected positional arguments, use --link/--workspace/--hello")
+	}
+	if strings.TrimSpace(*link) == "" {
+		return agentConfig{}, errors.New("missing --link, expected host:port")
+	}
+	if strings.Contains(*link, "://") {
+		return agentConfig{}, errors.New("--link must use host:port only, do not include ws://")
 	}
 
-	serverURL, serverAddr, err := normalizeServerAddress(args[0])
+	serverURL, serverAddr, err := normalizeServerAddress(*link)
 	if err != nil {
 		return agentConfig{}, err
 	}
 
-	workDir, err := resolveWorkDir(args)
+	workDir, err := resolveWorkDir(*workspace)
 	if err != nil {
 		return agentConfig{}, err
 	}
@@ -99,8 +125,13 @@ func loadConfig(args []string) (agentConfig, error) {
 	)
 	nodeName := firstNonEmpty(
 		os.Getenv("QUNCE_NODE_NAME"),
+		defaultNodeName,
 		mustGetConfig(store, "node_name"),
-		hostname,
+	)
+	helloMessage := firstNonEmpty(
+		strings.TrimSpace(*hello),
+		mustGetConfig(store, "hello_message"),
+		"你好，我想加入群策。",
 	)
 	nodeID := firstNonEmpty(
 		os.Getenv("QUNCE_NODE_ID"),
@@ -108,7 +139,7 @@ func loadConfig(args []string) (agentConfig, error) {
 		generateNodeID(),
 	)
 
-	if err := persistBootConfig(store, serverAddr, pairToken, nodeID, nodeName, workDir); err != nil {
+	if err := persistBootConfig(store, serverAddr, pairToken, nodeID, nodeName, workDir, helloMessage); err != nil {
 		store.Close()
 		return agentConfig{}, err
 	}
@@ -119,6 +150,8 @@ func loadConfig(args []string) (agentConfig, error) {
 		PairToken:  pairToken,
 		NodeID:     nodeID,
 		NodeName:   nodeName,
+		Hostname:   hostname,
+		Hello:      helloMessage,
 		MaxWorker:  2,
 		WorkDir:    workDir,
 		Store:      store,
@@ -135,8 +168,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 	logger.Info("connected to server", "url", cfg.ServerURL, "workdir", cfg.WorkDir)
 	_ = cfg.Store.RecordEvent("agent.connected", cfg.ServerURL)
 
-	if err := sendEnvelope(ctx, conn, buildEnvelope("agent.hello", cfg.NodeID, map[string]any{
-		"hostname":      cfg.NodeName,
+	runtime := &agentRuntime{conn: conn, cfg: cfg, logger: logger}
+
+	if err := runtime.send(ctx, buildEnvelope("agent.hello", cfg.NodeID, map[string]any{
+		"username":      cfg.NodeName,
+		"hostname":      cfg.Hostname,
+		"hello_message": cfg.Hello,
 		"platform":      runtimePlatform(),
 		"arch":          runtimeArch(),
 		"agent_version": "0.1.0",
@@ -149,7 +186,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		return fmt.Errorf("read server hello: %w", err)
 	}
 
-	if err := sendEnvelope(ctx, conn, buildEnvelope("agent.auth", cfg.NodeID, map[string]any{
+	if err := runtime.send(ctx, buildEnvelope("agent.auth", cfg.NodeID, map[string]any{
 		"pair_token": cfg.PairToken,
 		"node_id":    cfg.NodeID,
 	})); err != nil {
@@ -177,14 +214,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 	if authPayload.NodeName != "" {
 		cfg.NodeName = authPayload.NodeName
 	}
-	if err := persistBootConfig(cfg.Store, cfg.ServerAddr, cfg.PairToken, cfg.NodeID, cfg.NodeName, cfg.WorkDir); err != nil {
+	if err := persistBootConfig(cfg.Store, cfg.ServerAddr, cfg.PairToken, cfg.NodeID, cfg.NodeName, cfg.WorkDir, cfg.Hello); err != nil {
 		return err
 	}
 
-	if err := sendEnvelope(ctx, conn, buildEnvelope("agent.state.report", cfg.NodeID, map[string]any{
-		"status":        "online",
-		"max_workers":   cfg.MaxWorker,
-		"running_turns": []any{},
+	if err := runtime.send(ctx, buildEnvelope("agent.state.report", cfg.NodeID, map[string]any{
+		"status":           "online",
+		"max_workers":      cfg.MaxWorker,
+		"worker_count":     0,
+		"running_turn_ids": []string{},
 	})); err != nil {
 		return fmt.Errorf("report state: %w", err)
 	}
@@ -198,6 +236,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 			}
 			logger.Info("received message", "type", message.Type)
 			_ = cfg.Store.RecordEvent(message.Type, string(message.Data))
+			if message.Type == "server.turn.request" {
+				go runtime.handleTurnRequest(ctx, message)
+			}
 		}
 	}()
 
@@ -210,8 +251,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 			logger.Info("shutting down agent")
 			return nil
 		case <-ticker.C:
-			if err := sendEnvelope(ctx, conn, buildEnvelope("agent.ping", cfg.NodeID, map[string]any{
-				"running_turns":          0,
+			if err := runtime.send(ctx, buildEnvelope("agent.ping", cfg.NodeID, map[string]any{
+				"running_turn_ids":       []string{},
 				"worker_count":           0,
 				"load":                   0.0,
 				"last_completed_turn_id": nil,
@@ -220,6 +261,51 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 			}
 		}
 	}
+}
+
+type turnRequestData struct {
+	TurnID     string `json:"turn_id"`
+	RoomID     string `json:"room_id"`
+	Content    string `json:"content"`
+	SenderName string `json:"sender_name"`
+}
+
+func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelope) {
+	var data turnRequestData
+	if err := json.Unmarshal(message.Data, &data); err != nil {
+		r.logger.Warn("failed to decode turn request", "error", err)
+		return
+	}
+
+	if data.TurnID == "" {
+		return
+	}
+
+	if err := r.send(ctx, buildEnvelope("agent.turn.started", r.cfg.NodeID, map[string]any{
+		"turn_id":          data.TurnID,
+		"worker_count":     1,
+		"running_turn_ids": []string{data.TurnID},
+	})); err != nil {
+		r.logger.Warn("failed to send turn started", "error", err, "turn_id", data.TurnID)
+		return
+	}
+
+	time.Sleep(900 * time.Millisecond)
+	output := fmt.Sprintf("已处理你的请求：%s", data.Content)
+	if err := r.send(ctx, buildEnvelope("agent.turn.completed", r.cfg.NodeID, map[string]any{
+		"turn_id":          data.TurnID,
+		"output":           output,
+		"worker_count":     0,
+		"running_turn_ids": []string{},
+	})); err != nil {
+		r.logger.Warn("failed to send turn completed", "error", err, "turn_id", data.TurnID)
+	}
+}
+
+func (r *agentRuntime) send(ctx context.Context, payload map[string]any) error {
+	r.sendLock.Lock()
+	defer r.sendLock.Unlock()
+	return sendEnvelope(ctx, r.conn, payload)
 }
 
 func buildEnvelope(messageType, nodeID string, data map[string]any) map[string]any {
@@ -298,17 +384,8 @@ func normalizeServerAddress(raw string) (string, string, error) {
 	return parsed.String(), parsed.Host, nil
 }
 
-func resolveWorkDir(args []string) (string, error) {
-	if len(args) >= 2 && strings.TrimSpace(args[1]) != "" {
-		return expandHome(args[1])
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
-	}
-
-	return filepath.Join(home, ".qunce"), nil
+func resolveWorkDir(raw string) (string, error) {
+	return expandHome(raw)
 }
 
 func expandHome(path string) (string, error) {
@@ -329,13 +406,14 @@ func expandHome(path string) (string, error) {
 	return filepath.Clean(trimmed), nil
 }
 
-func persistBootConfig(store *localStore, serverAddr, pairToken, nodeID, nodeName, workDir string) error {
+func persistBootConfig(store *localStore, serverAddr, pairToken, nodeID, nodeName, workDir, helloMessage string) error {
 	for key, value := range map[string]string{
-		"server_addr": serverAddr,
-		"pair_token":  pairToken,
-		"node_id":     nodeID,
-		"node_name":   nodeName,
-		"work_dir":    workDir,
+		"server_addr":   serverAddr,
+		"pair_token":    pairToken,
+		"node_id":       nodeID,
+		"node_name":     nodeName,
+		"work_dir":      workDir,
+		"hello_message": helloMessage,
 	} {
 		if err := store.Set(key, value); err != nil {
 			return err
@@ -395,6 +473,5 @@ func runtimeArch() string {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: agentd <host:port|ws://host:port/ws/agent> [workdir]")
-	fmt.Fprintln(os.Stderr, "example: agentd 127.0.0.1:8000 ~/.qunce")
+	fmt.Fprintln(os.Stderr, "usage: agentd --link 127.0.0.1:8000 [--workspace ~/.qunce] [--hello \"你好，我想加入群策。\"]")
 }

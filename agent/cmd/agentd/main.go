@@ -227,11 +227,16 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		return fmt.Errorf("report state: %w", err)
 	}
 
+	readErrCh := make(chan error, 1)
 	go func() {
 		for {
 			message, readErr := readEnvelope(ctx, conn)
 			if readErr != nil {
 				logger.Warn("read loop stopped", "error", readErr)
+				select {
+				case readErrCh <- readErr:
+				default:
+				}
 				return
 			}
 			logger.Info("received message", "type", message.Type)
@@ -250,6 +255,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		case <-ctx.Done():
 			logger.Info("shutting down agent")
 			return nil
+		case readErr := <-readErrCh:
+			return fmt.Errorf("connection closed: %w", readErr)
 		case <-ticker.C:
 			if err := runtime.send(ctx, buildEnvelope("agent.ping", cfg.NodeID, map[string]any{
 				"running_turn_ids":       []string{},
@@ -265,7 +272,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 
 type turnRequestData struct {
 	TurnID     string `json:"turn_id"`
-	RoomID     string `json:"room_id"`
+	ChatID     string `json:"chat_id"`
 	Content    string `json:"content"`
 	SenderName string `json:"sender_name"`
 }

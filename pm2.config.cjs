@@ -1,7 +1,10 @@
 const path = require("path");
 
 const root = __dirname;
-const python = path.join(root, ".pixi", "envs", "default", "bin", "python");
+const python =
+  process.platform === "win32"
+    ? path.join(root, ".pixi", "envs", "default", "python.exe")
+    : path.join(root, ".pixi", "envs", "default", "bin", "python");
 
 module.exports = {
   apps: [

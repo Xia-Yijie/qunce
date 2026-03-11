@@ -26,6 +26,34 @@ class AgentConnectionRegistry:
         with self._lock:
             return self._connections.get(node_id)
 
+    def disconnect(self, node_id: str) -> None:
+        connection = self.get(node_id)
+        if connection is None:
+            return
+
+        try:
+            with connection["send_lock"]:
+                send_json(
+                    connection["ws"],
+                    envelope(
+                        "server.notice",
+                        {"level": "warning", "message": "node removed by server"},
+                        source_kind="server",
+                        source_id="main",
+                        target_kind="agent",
+                        target_id=node_id,
+                    ),
+                )
+        except Exception:
+            pass
+
+        try:
+            connection["ws"].close()
+        except Exception:
+            pass
+        finally:
+            self.remove(node_id)
+
 
 agent_connections = AgentConnectionRegistry()
 
@@ -39,7 +67,7 @@ def dispatch_turn_to_agent(*, node_id: str, turn: dict[str, Any]) -> None:
         "server.turn.request",
         {
             "turn_id": turn["turn_id"],
-            "room_id": turn["room_id"],
+            "chat_id": turn["chat_id"],
             "content": turn["content"],
             "sender_name": turn["sender_name"],
         },

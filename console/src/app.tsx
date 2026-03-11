@@ -3,6 +3,7 @@ import {
   App as AntApp,
   Badge,
   Button,
+  Dropdown,
   Empty,
   Flex,
   Input,
@@ -15,10 +16,10 @@ import {
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
-type RoomSummary = {
-  room_id: string;
+type ChatSummary = {
+  chat_id: string;
   name: string;
   mode: string;
   member_count: number;
@@ -48,8 +49,8 @@ type PersonaSummary = {
   status: string;
 };
 
-type RoomSnapshot = {
-  room_id: string;
+type ChatSnapshot = {
+  chat_id: string;
   name: string;
   mode: string;
   members: Array<{ persona_id: string; name: string; status: string }>;
@@ -72,7 +73,7 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 };
 
 const api = {
-  rooms: () => fetchJson<RoomSummary[]>("/api/rooms"),
+  chats: () => fetchJson<ChatSummary[]>("/api/chats"),
   nodes: () => fetchJson<NodeSummary[]>("/api/nodes"),
   acceptNode: (nodeId: string, payload: { display_symbol: string; remark: string }) =>
     fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
@@ -81,10 +82,10 @@ const api = {
       body: JSON.stringify(payload),
     }),
   rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
-  roomSnapshot: (roomId: string) => fetchJson<RoomSnapshot>(`/api/rooms/${roomId}/snapshot`),
+  chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
-  sendMessage: (roomId: string, content: string) =>
-    fetchJson<{ ok: boolean }>(`/api/rooms/${roomId}/messages`, {
+  sendMessage: (chatId: string, content: string) =>
+    fetchJson<{ ok: boolean }>(`/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content, sender_name: "你" }),
@@ -127,6 +128,28 @@ const AgentRailIcon = () => (
   </svg>
 );
 
+const StartChatMenuIcon = () => (
+  <svg viewBox="0 0 20 20" aria-hidden="true" className="quick-create-menu-icon">
+    <path
+      d="M4 5.5C4 4.67 4.67 4 5.5 4H14.5C15.33 4 16 4.67 16 5.5V10.5C16 11.33 15.33 12 14.5 12H9L6 15V12H5.5C4.67 12 4 11.33 4 10.5V5.5Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const AddFriendMenuIcon = () => (
+  <svg viewBox="0 0 20 20" aria-hidden="true" className="quick-create-menu-icon">
+    <circle cx="8" cy="7" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M3.8 15C4.2 12.9 5.9 11.5 8 11.5C10.1 11.5 11.8 12.9 12.2 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M15 6V10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M13 8H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
 const SettingsRailIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true" className="rail-icon">
     <path
@@ -146,15 +169,17 @@ const SettingsRailIcon = () => (
 );
 
 const railItems = [
-  { key: "/rooms/room_lobby", icon: <ChatRailIcon />, description: "聊天" },
-  { key: "/settings/personas", icon: <AgentRailIcon />, description: "Agent" },
+  { key: "/chats", icon: <ChatRailIcon />, description: "聊天" },
+  { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
 ];
 
 const settingsRailItem = { key: "/settings/runtime", icon: <SettingsRailIcon />, description: "设置" };
 
 const getPendingNodeCount = (nodes: NodeSummary[]) => nodes.filter((node) => node.can_accept).length;
 
-const useConsoleSocket = (roomId: string) => {
+const getChatPath = (chatId: string) => `/chats/${chatId}`;
+
+const useConsoleSocket = (chatId: string | null) => {
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
   const [lastNotice, setLastNotice] = useState("等待连接群聊通道");
@@ -175,7 +200,7 @@ const useConsoleSocket = (roomId: string) => {
           ts: new Date().toISOString(),
           source: { kind: "console", id: "browser" },
           target: { kind: "server", id: "main" },
-          data: { room_ids: [roomId], watch_nodes: true },
+          data: { chat_ids: chatId ? [chatId] : [], watch_nodes: true },
         }),
       );
     });
@@ -191,18 +216,18 @@ const useConsoleSocket = (roomId: string) => {
         const data = (payload.data ?? {}) as { nodes?: NodeSummary[] };
         queryClient.setQueryData(["nodes"], data.nodes ?? []);
       }
-      if (payload.type === "server.room.snapshot") {
-        const data = payload.data as RoomSnapshot;
-        queryClient.setQueryData(["room", data.room_id], data);
-        queryClient.setQueryData(["rooms"], (previous: RoomSummary[] | undefined) =>
-          (previous ?? []).map((room) =>
-            room.room_id === data.room_id
+      if (payload.type === "server.chat.snapshot") {
+        const data = payload.data as ChatSnapshot;
+        queryClient.setQueryData(["chat", data.chat_id], data);
+        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+          (previous ?? []).map((chat) =>
+            chat.chat_id === data.chat_id
               ? {
-                  ...room,
+                  ...chat,
                   member_count: data.members.length,
                   message_count: data.messages.length,
                 }
-              : room,
+              : chat,
           ),
         );
       }
@@ -219,14 +244,14 @@ const useConsoleSocket = (roomId: string) => {
     });
 
     return () => socket.close();
-  }, [queryClient, roomId]);
+  }, [chatId, queryClient]);
 
   return { connected, lastNotice };
 };
 
-const getRoomPreview = (room: RoomSummary) => {
-  if (room.message_count > 0) {
-    return `${room.member_count} 个成员，最近有新消息`;
+const getChatPreview = (chat: ChatSummary) => {
+  if (chat.message_count > 0) {
+    return `${chat.member_count} 个成员，最近有新消息`;
   }
   return "还没有消息，等待第一轮讨论";
 };
@@ -258,11 +283,22 @@ const formatReadableTime = (raw?: string) => {
   }).format(date);
 };
 
-const getNodeFullName = (node: Pick<NodeSummary, "name" | "hostname">) =>
-  node.name.includes("@") || !node.hostname ? node.name : `${node.name}@${node.hostname}`;
+const getNodeName = (node: Pick<NodeSummary, "name" | "hostname">) => {
+  const hostname = node.hostname.trim();
+  if (hostname) {
+    return hostname;
+  }
+  const fallback = node.name.split("@").pop()?.trim();
+  return fallback || node.name;
+};
 
-const getNodePrimaryName = (node: Pick<NodeSummary, "remark" | "name">) =>
-  node.remark || node.name.split("@")[0] || node.name;
+const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "hostname">) => {
+  const remark = node.remark.trim();
+  if (remark) {
+    return remark;
+  }
+  return getNodeName(node);
+};
 
 const getMessageTone = (senderType: string) => {
   if (senderType === "system") {
@@ -274,38 +310,83 @@ const getMessageTone = (senderType: string) => {
   return "agent";
 };
 
+const QuickCreateMenu = () => {
+  const navigate = useNavigate();
+
+  return (
+    <Dropdown
+      overlayClassName="quick-create-dropdown"
+      trigger={["click"]}
+      menu={{
+        items: [
+          {
+            key: "start-chat",
+            label: (
+              <span className="quick-create-menu-label">
+                <StartChatMenuIcon />
+                <span>发起聊天</span>
+              </span>
+            ),
+          },
+          {
+            key: "add-friend",
+            label: (
+              <span className="quick-create-menu-label">
+                <AddFriendMenuIcon />
+                <span>添加朋友</span>
+              </span>
+            ),
+          },
+        ],
+        onClick: ({ key, domEvent }) => {
+          domEvent.stopPropagation();
+          if (key === "start-chat") {
+            navigate("/chats");
+            return;
+          }
+          if (key === "add-friend") {
+            navigate("/friends");
+          }
+        },
+      }}
+    >
+      <button type="button" className="conversation-plus" aria-label="快捷操作">
+        +
+      </button>
+    </Dropdown>
+  );
+};
+
 const ConversationList = ({
-  rooms,
-  selectedRoomId,
+  chats,
+  selectedChatId,
 }: {
-  rooms: RoomSummary[];
-  selectedRoomId: string;
+  chats: ChatSummary[];
+  selectedChatId: string;
 }) => (
   <aside className="conversation-pane">
     <div className="conversation-header">
       <div className="conversation-search-row">
         <div className="conversation-search">搜索</div>
-        <button type="button" className="conversation-plus">
-          +
-        </button>
+        <QuickCreateMenu />
       </div>
     </div>
     <List
       className="conversation-list"
-      dataSource={rooms}
-      renderItem={(room) => {
-        const isActive = room.room_id === selectedRoomId;
+      dataSource={chats}
+      renderItem={(chat) => {
+        const isActive = chat.chat_id === selectedChatId;
         return (
           <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
-            <Link to={`/rooms/${room.room_id}`} className="conversation-link">
-              <div className="conversation-avatar">{room.name.slice(0, 1)}</div>
+            <Link to={getChatPath(chat.chat_id)} className="conversation-link">
+              <div className="conversation-avatar">{chat.name.slice(0, 1)}</div>
               <div className="conversation-copy">
                 <Flex justify="space-between" align="center" gap={12}>
-                  <Typography.Text strong>{room.name}</Typography.Text>
-                  <Typography.Text type="secondary">{room.message_count > 0 ? "刚刚" : ""}</Typography.Text>
+                  <Typography.Text strong>{chat.name}</Typography.Text>
+                  <Typography.Text type="secondary">{chat.message_count > 0 ? "刚刚" : ""}</Typography.Text>
                 </Flex>
                 <Typography.Text type="secondary" className="conversation-preview">
-                  {getRoomPreview(room)}
+                  {getChatPreview(chat)}
                 </Typography.Text>
               </div>
             </Link>
@@ -353,7 +434,10 @@ const DirectoryLayout = ({
     <section className="directory-shell">
       <aside className="directory-list-pane">
         <div className="directory-toolbar">
-          <div className="directory-search">搜索</div>
+          <div className="conversation-search-row">
+            <div className="conversation-search">搜索</div>
+            <QuickCreateMenu />
+          </div>
         </div>
         <div className="directory-sections">
           {sections.map((section) => {
@@ -440,24 +524,26 @@ const MessageBubble = ({
   );
 };
 
-const RoomPage = ({ connected, lastNotice }: { connected: boolean; lastNotice: string }) => {
-  const { roomId = "room_lobby" } = useParams();
+const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: boolean; lastNotice: string; chatId?: string }) => {
+  const { chatId } = useParams();
+  const activeChatId = forcedChatId ?? chatId;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const { data: rooms = [] } = useQuery({ queryKey: ["rooms"], queryFn: api.rooms });
+  const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
   const { data: snapshot, isLoading } = useQuery({
-    queryKey: ["room", roomId],
-    queryFn: () => api.roomSnapshot(roomId),
+    queryKey: ["chat", activeChatId],
+    queryFn: () => api.chatSnapshot(activeChatId ?? ""),
+    enabled: Boolean(activeChatId),
   });
 
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || sending) {
+    if (!content || sending || !activeChatId) {
       return;
     }
     setSending(true);
     try {
-      await api.sendMessage(roomId, content);
+      await api.sendMessage(activeChatId, content);
       setDraft("");
     } finally {
       setSending(false);
@@ -472,12 +558,27 @@ const RoomPage = ({ connected, lastNotice }: { connected: boolean; lastNotice: s
     );
   }
 
+  if (!activeChatId) {
+    return (
+      <div className="wechat-shell">
+        <ConversationList chats={chats} selectedChatId="" />
+        <div className="chat-pane empty-pane">
+          <div className="empty-state-panel">
+          <Empty description="还没有聊天室" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!snapshot) {
     return (
       <div className="wechat-shell">
-        <ConversationList rooms={rooms} selectedRoomId={roomId} />
+        <ConversationList chats={chats} selectedChatId={activeChatId} />
         <div className="chat-pane empty-pane">
+          <div className="empty-state-panel">
           <Empty description="房间不存在" />
+          </div>
         </div>
       </div>
     );
@@ -485,7 +586,7 @@ const RoomPage = ({ connected, lastNotice }: { connected: boolean; lastNotice: s
 
   return (
     <div className="wechat-shell">
-      <ConversationList rooms={rooms} selectedRoomId={roomId} />
+      <ConversationList chats={chats} selectedChatId={activeChatId} />
 
       <section className="chat-pane">
         <header className="chat-header">
@@ -630,7 +731,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
 
   const openAcceptDialog = (node: NodeSummary) => {
     setPendingNodeId(node.node_id);
-    setDisplaySymbolDraft(node.display_symbol || getNodeFullName(node).slice(0, 1));
+    setDisplaySymbolDraft(node.display_symbol || getNodeDisplayName(node).slice(0, 1));
     setRemarkDraft(node.remark || "");
   };
 
@@ -666,6 +767,26 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     closeAcceptDialog();
   };
 
+  const deleteNode = async (node: NodeSummary) => {
+    Modal.confirm({
+      title: "删除节点",
+      content: `确认删除节点 ${getNodeDisplayName(node)}？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        await api.rejectNode(node.node_id);
+        queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
+          (previous ?? []).filter((item) => item.node_id !== node.node_id),
+        );
+        if (selectedEntry?.kind === "node" && selectedEntry.node_id === node.node_id) {
+          setSelectedEntryId(null);
+        }
+      },
+    });
+  };
+
   return (
     <>
       <DirectoryLayout
@@ -678,11 +799,25 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
           if (!entry) return null;
           if (entry.kind === "node") {
             return (
-              <>
-                <div className="directory-avatar">{(entry.display_symbol || getNodeFullName(entry)).slice(0, 1)}</div>
+              <Dropdown
+                trigger={["contextMenu"]}
+                menu={{
+                  items: [{ key: "delete", label: "删除节点", danger: true }],
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    if (key === "delete") {
+                      void deleteNode(entry);
+                    }
+                  },
+                }}
+              >
+                <div className="directory-node-row">
+                <div className="directory-avatar">{(entry.display_symbol || getNodeDisplayName(entry)).slice(0, 1)}</div>
                 <div className="directory-copy">
                   <div className="directory-title-row">
-                    <Typography.Text strong>{getNodeFullName(entry)}</Typography.Text>
+                    <Typography.Text strong className="directory-name-text">
+                      {getNodeDisplayName(entry)}
+                    </Typography.Text>
                     {entry.can_accept ? (
                       <Button
                         size="small"
@@ -704,7 +839,8 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     {entry.hello_message || "等待节点发来打招呼用语"}
                   </Typography.Text>
                 </div>
-              </>
+                </div>
+              </Dropdown>
             );
           }
           return (
@@ -722,29 +858,31 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
             selectedEntry.kind === "node" ? (
               <div className="profile-card">
                 <div className="profile-header">
-                  <div className="profile-avatar">{(selectedEntry.display_symbol || getNodeFullName(selectedEntry)).slice(0, 1)}</div>
+                  <div className="profile-avatar">
+                    {(selectedEntry.display_symbol || getNodeDisplayName(selectedEntry)).slice(0, 1)}
+                  </div>
                   <div className="profile-headline">
                     <div className="profile-title-row">
                       <Typography.Title level={3} style={{ margin: 0 }}>
-                        {getNodePrimaryName(selectedEntry)}
+                        {getNodeDisplayName(selectedEntry)}
                       </Typography.Title>
                       <Typography.Text type="secondary" className="profile-presence-text">
                         {selectedEntry.status_label}
                       </Typography.Text>
                     </div>
                     <Typography.Text type="secondary" className="profile-subline">
-                      节点名：{getNodeFullName(selectedEntry)}
+                      节点名：{getNodeName(selectedEntry)}
                     </Typography.Text>
                   </div>
                 </div>
                 <div className="profile-grid">
                   <div className="profile-row">
-                    <span className="profile-label">备注/用户名</span>
-                    <span>{getNodePrimaryName(selectedEntry)}</span>
+                    <span className="profile-label">备注</span>
+                    <span>{selectedEntry.remark.trim() || "-"}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">节点名</span>
-                    <span>{getNodeFullName(selectedEntry)}</span>
+                    <span>{getNodeName(selectedEntry)}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">打招呼语</span>
@@ -805,7 +943,9 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
               </div>
             )
           ) : (
-            <Empty description="还没有智能体或节点" />
+            <div className="empty-state-panel">
+              <Empty description="还没有智能体或节点" />
+            </div>
           )
         }
       />
@@ -819,9 +959,9 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
       >
         <div className="accept-dialog-body">
           <div className="accept-dialog-preview">
-            <div className="accept-dialog-symbol">{(displaySymbolDraft || (pendingNode ? getNodeFullName(pendingNode) : "•")).slice(0, 1)}</div>
+            <div className="accept-dialog-symbol">{(displaySymbolDraft || (pendingNode ? getNodeDisplayName(pendingNode) : "•")).slice(0, 1)}</div>
             <div>
-              <Typography.Text strong>{pendingNode ? getNodeFullName(pendingNode) : "-"}</Typography.Text>
+              <Typography.Text strong>{pendingNode ? getNodeDisplayName(pendingNode) : "-"}</Typography.Text>
               <div className="accept-dialog-subtitle">{pendingNode?.node_id ?? ""}</div>
             </div>
           </div>
@@ -870,18 +1010,33 @@ const RuntimePage = () => (
 const AppShell = () => {
   const location = useLocation();
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  const activeRoomId = useMemo(() => {
-    const match = location.pathname.match(/^\/rooms\/([^/]+)/);
-    return match?.[1] ?? "room_lobby";
+  const activeChatId = useMemo(() => {
+    const match = location.pathname.match(/^\/chats\/([^/]+)/);
+    if (match) {
+      return match[1];
+    }
+    if (location.pathname === "/chats") {
+      return null;
+    }
+    return null;
   }, [location.pathname]);
-  const consoleSocket = useConsoleSocket(activeRoomId);
+  const consoleSocket = useConsoleSocket(activeChatId);
   const selectedKey = useMemo(() => {
-    if (location.pathname.startsWith("/rooms")) {
-      return "/rooms/room_lobby";
+    if (location.pathname === "/chats" || location.pathname.startsWith("/chats/")) {
+      return "/chats";
     }
     return location.pathname;
   }, [location.pathname]);
   const pendingNodeCount = useMemo(() => getPendingNodeCount(nodes), [nodes]);
+
+  useEffect(() => {
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", handleContextMenu);
+    return () => window.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
 
   return (
     <AntApp>
@@ -895,7 +1050,7 @@ const AppShell = () => {
               const active = selectedKey === item.key;
               return (
                 <Link key={item.key} to={item.key} className={`rail-button ${active ? "active" : ""}`}>
-                  {item.key === "/settings/personas" && pendingNodeCount > 0 ? (
+                  {item.key === "/friends" && pendingNodeCount > 0 ? (
                     <Badge count={pendingNodeCount} size="small">
                       <span className="rail-glyph">{item.icon}</span>
                     </Badge>
@@ -918,11 +1073,12 @@ const AppShell = () => {
 
         <Layout.Content className="frame-content">
           <Routes>
-            <Route path="/" element={<Navigate to="/rooms/room_lobby" replace />} />
+            <Route path="/" element={<Navigate to="/chats" replace />} />
             <Route path="/setup" element={<SetupPage />} />
-            <Route path="/rooms/:roomId" element={<RoomPage {...consoleSocket} />} />
+            <Route path="/chats" element={<ChatPage {...consoleSocket} />} />
+            <Route path="/chats/:chatId" element={<ChatPage {...consoleSocket} />} />
             <Route path="/settings/nodes" element={<AgentDirectoryPage defaultKind="node" />} />
-            <Route path="/settings/personas" element={<AgentDirectoryPage defaultKind="agent" />} />
+            <Route path="/friends" element={<AgentDirectoryPage defaultKind="agent" />} />
             <Route path="/settings/runtime" element={<RuntimePage />} />
           </Routes>
         </Layout.Content>

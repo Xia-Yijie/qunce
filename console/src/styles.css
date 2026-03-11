@@ -139,6 +139,14 @@ a {
   place-items: center;
 }
 
+.empty-state-panel {
+  width: 100%;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
 .conversation-pane {
   background: #f7f7f7;
   border-right: 1px solid rgba(31, 35, 41, 0.08);
@@ -238,6 +246,10 @@ a {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+}
+
+.chat-pane.empty-pane {
+  grid-template-rows: 1fr;
 }
 
 .chat-header {
@@ -488,6 +500,13 @@ a {
   border: 0;
 }
 
+.directory-node-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .directory-avatar,
 .profile-avatar {
   width: 40px;
@@ -528,11 +547,24 @@ a {
   gap: 12px;
 }
 
+.directory-name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .directory-presence-text,
 .directory-meta-line,
 .profile-presence-text,
 .profile-subline {
   font-size: 13px;
+}
+
+.directory-presence-text,
+.profile-presence-text {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .directory-meta-line {
@@ -554,6 +586,60 @@ a {
 .profile-accept-button:hover {
   border-color: rgba(39, 110, 241, 0.32) !important;
   color: #174aa4 !important;
+}
+
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-danger:hover,
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-dangerous:hover,
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-danger-active,
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-dangerous-active {
+  background: #fff1f0 !important;
+  color: #cf1322 !important;
+}
+
+.quick-create-dropdown .ant-dropdown-menu {
+  padding: 8px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(31, 35, 41, 0.06);
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 12px 28px rgba(31, 35, 41, 0.14) !important;
+}
+
+.quick-create-dropdown .ant-dropdown-menu-item {
+  min-width: 148px;
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+}
+
+.quick-create-dropdown .ant-dropdown-menu-item:hover,
+.quick-create-dropdown .ant-dropdown-menu-item-active {
+  background: #f4f6f8 !important;
+}
+
+.quick-create-menu-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: #2f343a;
+}
+
+.quick-create-menu-icon {
+  width: 20px;
+  height: 20px;
+  color: #4a5057;
+  flex: 0 0 auto;
+}
+
+.ant-dropdown .ant-dropdown-menu {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item,
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-danger,
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item-dangerous {
+  margin: 0 !important;
+  border-radius: 0 !important;
 }
 
 .profile-accept-button {

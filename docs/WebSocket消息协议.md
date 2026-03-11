@@ -145,9 +145,8 @@
 
 ```json
 {
-  "room_ids": ["room_001"],
-  "watch_nodes": true,
-  "watch_turns": true
+  "chat_ids": ["chat_001"],
+  "watch_nodes": true
 }
 ```
 
@@ -159,7 +158,7 @@ Agent 链路必须有心跳，Console 链路可依赖底层连接状态。
 
 ```json
 {
-  "running_turns": 1,
+  "running_turn_ids": [],
   "worker_count": 1,
   "load": 0.42,
   "last_completed_turn_id": "turn_009"
@@ -191,49 +190,23 @@ Agent 链路必须有心跳，Console 链路可依赖底层连接状态。
 {
   "status": "online",
   "max_workers": 4,
-  "running_turns": [
-    {
-      "turn_id": "turn_010",
-      "worker_id": "worker_010",
-      "status": "running",
-      "started_at": "2026-03-11T14:10:00Z"
-    }
-  ]
+  "worker_count": 1,
+  "running_turn_ids": ["turn_010"]
 }
 ```
 
 ### 6.2 创建执行任务
 
-### `server.turn.create`
+### `server.turn.request`
 
-用途：Server 要求某个节点为指定智能体执行一轮发言。
+用途：Server 要求某个节点执行一轮发言。
 
 ```json
 {
   "turn_id": "turn_011",
-  "room_id": "room_001",
-  "message_id": "msg_1001",
-  "persona": {
-    "persona_id": "persona_architect",
-    "name": "架构师",
-    "system_prompt": "你是一个偏架构评审风格的智能体。",
-    "style_prompt": "回答简洁，先给结论。"
-  },
-  "input": {
-    "trigger_type": "mention",
-    "prompt": "请从架构角度评价这个方案。",
-    "context_messages": [
-      {
-        "role": "user",
-        "name": "产品经理",
-        "content": "请讨论一下当前系统方案。"
-      }
-    ]
-  },
-  "runtime": {
-    "timeout_sec": 300,
-    "max_output_chars": 20000
-  }
+  "chat_id": "chat_001",
+  "content": "请从架构角度评价这个方案。",
+  "sender_name": "产品经理"
 }
 ```
 
@@ -241,137 +214,41 @@ Agent 链路必须有心跳，Console 链路可依赖底层连接状态。
 
 - `turn_id` 在系统内全局唯一
 - Agent 必须把 `turn_id` 视为幂等键
-- 如果重复收到同一个 `turn_id`，且本地已在执行，则直接重复返回接受状态
+- 如果重复收到同一个 `turn_id`，且本地已在执行，则本地仍按同一个任务处理
 
-### `agent.turn.accepted`
-
-```json
-{
-  "turn_id": "turn_011",
-  "worker_id": "worker_011",
-  "status": "accepted"
-}
-```
-
-### `agent.turn.rejected`
+### `agent.turn.started`
 
 ```json
 {
   "turn_id": "turn_011",
-  "code": "NODE_BUSY",
-  "message": "当前节点并发已满"
+  "worker_count": 1,
+  "running_turn_ids": ["turn_011"]
 }
 ```
 
 ### 6.3 流式输出
 
-### `agent.turn.delta`
-
-用途：把标准输出里的可展示内容按顺序推给 Server。
-
-```json
-{
-  "turn_id": "turn_011",
-  "seq": 1,
-  "text": "从架构上看，当前方案的分层是合理的，"
-}
-```
-
-### `agent.turn.stderr`
-
-用途：回传错误输出，主要用于调试和运行详情。
-
-```json
-{
-  "turn_id": "turn_011",
-  "seq": 1,
-  "text": "warning: ..."
-}
-```
-
-### `agent.turn.status`
-
-```json
-{
-  "turn_id": "turn_011",
-  "status": "running"
-}
-```
-
-状态建议枚举：
-
-- `queued`
-- `accepted`
-- `running`
-- `completed`
-- `failed`
-- `interrupted`
-- `cancelled`
+当前实现还没有 `delta` / `stderr` / `status` 这类流式事件，Agent 仅在开始和结束时上报状态。
 
 ### `agent.turn.completed`
 
 ```json
 {
   "turn_id": "turn_011",
-  "final_text": "从架构上看，当前方案的分层是合理的，但需要尽快明确协议边界。",
-  "exit_code": 0,
-  "duration_ms": 8421
+  "output": "从架构上看，当前方案的分层是合理的，但需要尽快明确协议边界。",
+  "worker_count": 0,
+  "running_turn_ids": []
 }
 ```
 
 说明：
 
-- `final_text` 是最终汇总文本
-- Server 以 `final_text` 为准更新消息正文
-- 如果中间丢过部分 `delta`，前端仍能通过完成事件拿到完整消息
-
-### `agent.turn.failed`
-
-```json
-{
-  "turn_id": "turn_011",
-  "code": "CODEX_START_FAILED",
-  "message": "codex 可执行文件未找到",
-  "retryable": false
-}
-```
+- `output` 是最终回复文本
+- Server 以 `output` 为准更新消息正文
 
 ### 6.4 控制指令
 
-### `server.turn.interrupt`
-
-```json
-{
-  "turn_id": "turn_011"
-}
-```
-
-语义：
-
-- 请求本地 worker 尝试优雅中断
-- 优先发送软中断，而不是直接 kill
-
-### `server.turn.kill`
-
-```json
-{
-  "turn_id": "turn_011"
-}
-```
-
-语义：
-
-- 强制终止 worker
-- 只有在中断失败或用户明确终止时使用
-
-### `agent.turn.interrupted`
-
-```json
-{
-  "turn_id": "turn_011",
-  "status": "interrupted"
-}
-```
+当前实现还没有中断、kill 等控制指令。
 
 ## 7. Console 通道消息类型
 
@@ -379,12 +256,12 @@ Console 通道只做“实时同步”，不直接下发执行命令。
 
 ### 7.1 快照
 
-### `server.room.snapshot`
+### `server.chat.snapshot`
 
 ```json
 {
-  "room": {
-    "room_id": "room_001",
+  "chat": {
+    "chat_id": "chat_001",
     "name": "架构讨论组",
     "mode": "mention"
   },
@@ -405,7 +282,7 @@ Console 通道只做“实时同步”，不直接下发执行命令。
 
 ```json
 {
-  "room_id": "room_001",
+  "chat_id": "chat_001",
   "message": {
     "message_id": "msg_1001",
     "sender_type": "user",
@@ -417,64 +294,24 @@ Console 通道只做“实时同步”，不直接下发执行命令。
 }
 ```
 
-### `server.message.delta`
-
-```json
-{
-  "room_id": "room_001",
-  "message_id": "msg_1002",
-  "turn_id": "turn_011",
-  "seq": 1,
-  "text": "从架构上看，"
-}
-```
-
-### `server.message.completed`
-
-```json
-{
-  "room_id": "room_001",
-  "message_id": "msg_1002",
-  "turn_id": "turn_011",
-  "final_text": "从架构上看，当前方案的分层是合理的，但需要尽快明确协议边界。",
-  "status": "completed"
-}
-```
-
-### `server.message.failed`
-
-```json
-{
-  "room_id": "room_001",
-  "message_id": "msg_1002",
-  "turn_id": "turn_011",
-  "code": "CODEX_START_FAILED",
-  "message": "本地执行失败",
-  "status": "failed"
-}
-```
+当前实现还没有独立的消息增量事件，聊天更新通过重新广播 `server.chat.snapshot` 完成。
 
 ### 7.3 状态同步
-
-### `server.turn.updated`
-
-```json
-{
-  "turn_id": "turn_011",
-  "room_id": "room_001",
-  "persona_id": "persona_architect",
-  "status": "running"
-}
-```
 
 ### `server.node.updated`
 
 ```json
 {
-  "node_id": "node_001",
-  "status": "online",
-  "running_turns": 1,
-  "last_seen_at": "2026-03-11T14:12:15Z"
+  "nodes": [
+    {
+      "node_id": "node_001",
+      "name": "张三",
+      "hostname": "macbook-pro-01",
+      "status": "online",
+      "approved": true,
+      "last_seen_at": "2026-03-11T14:12:15Z"
+    }
+  ]
 }
 ```
 
@@ -493,9 +330,7 @@ Console 通道只做“实时同步”，不直接下发执行命令。
 
 - `turn_id` 全局唯一
 - `message_id` 全局唯一
-- 所有 `delta` 必须带 `seq`
-- Server 以 `turn_id + seq` 去重
-- Agent 对重复的 `server.turn.create` 必须幂等处理
+- Agent 对重复的 `server.turn.request` 必须幂等处理
 
 这样可以降低网络重试带来的重复执行风险。
 
@@ -517,14 +352,9 @@ MVP 先用简化方案：
 
 - `PAIR_TOKEN_INVALID`
 - `AUTH_FAILED`
-- `NODE_BUSY`
-- `NODE_OFFLINE`
 - `TURN_NOT_FOUND`
-- `TURN_ALREADY_FINISHED`
 - `CODEX_NOT_FOUND`
 - `CODEX_START_FAILED`
-- `TURN_TIMEOUT`
-- `TURN_INTERRUPTED`
 - `UNKNOWN_ERROR`
 
 ## 11. 实现建议

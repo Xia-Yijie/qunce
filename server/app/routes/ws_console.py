@@ -4,7 +4,7 @@ from typing import Any
 
 from server.app.protocol import envelope, receive_json, send_json
 from server.app.runtime import sock
-from server.app.services.events import console_subscriptions, send_node_update, send_payload, send_room_snapshots
+from server.app.services.events import console_subscriptions, send_chat_snapshots, send_node_update, send_payload
 
 
 @sock.route("/ws/console")
@@ -29,23 +29,23 @@ def console_socket(ws: Any) -> None:
                     send_payload(subscription_id, payload)
                 continue
 
-            room_ids = message.get("data", {}).get("room_ids", ["room_lobby"])
+            chat_ids = message.get("data", {}).get("chat_ids", [])
             watch_nodes = bool(message.get("data", {}).get("watch_nodes", False))
 
             if subscription_id is None:
                 subscription_id = console_subscriptions.add(
                     ws,
-                    room_ids,
+                    chat_ids,
                     watch_nodes=watch_nodes,
                 )
             else:
                 console_subscriptions.update(
                     subscription_id,
-                    room_ids,
+                    chat_ids,
                     watch_nodes=watch_nodes,
                 )
 
-            send_room_snapshots(subscription_id, message.get("request_id"))
+            send_chat_snapshots(subscription_id, message.get("request_id"))
             if watch_nodes:
                 send_node_update(subscription_id, message.get("request_id"))
     except ConnectionError:

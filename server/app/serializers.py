@@ -11,18 +11,18 @@ def meta_payload(*, app_name: str, app_version: str) -> dict[str, Any]:
     }
 
 
-def room_summary_payload(room: dict[str, Any]) -> dict[str, Any]:
+def chat_summary_payload(chat: dict[str, Any]) -> dict[str, Any]:
     return {
-        "room_id": room["room_id"],
-        "name": room["name"],
-        "mode": room["mode"],
-        "member_count": len(room["members"]),
-        "message_count": len(room["messages"]),
+        "chat_id": chat["chat_id"],
+        "name": chat["name"],
+        "mode": chat["mode"],
+        "member_count": len(chat.get("members", [])),
+        "message_count": len(chat.get("messages", [])),
     }
 
 
-def room_snapshot_payload(room: dict[str, Any]) -> dict[str, Any]:
-    return deepcopy(room)
+def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(chat)
 
 
 def node_summary_payload(node: dict[str, Any]) -> dict[str, Any]:

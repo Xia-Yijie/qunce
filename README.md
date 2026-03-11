@@ -99,35 +99,35 @@ pixi run agent-build
 运行本地 agent：
 
 ```bash
-pixi run --manifest-path . sh -lc 'cd agent && CGO_ENABLED=0 go run ./cmd/agentd 127.0.0.1:8000'
+pixi run --manifest-path . sh -lc 'cd agent && CGO_ENABLED=0 go run ./cmd/agentd --link 127.0.0.1:8000'
 ```
 
 或者进入 `agent/` 目录直接运行：
 
 ```bash
-CGO_ENABLED=0 go run ./cmd/agentd 127.0.0.1:8000
+CGO_ENABLED=0 go run ./cmd/agentd --link 127.0.0.1:8000
 ```
 
 ## agentd 启动参数
 
-`agentd` 现在必须显式传入服务端地址，格式可以是 `host:port`，也兼容完整的 WebSocket URL。
+`agentd` 现在必须通过 `--link` 显式传入服务端地址，格式可以是 `host:port`，也兼容完整的 WebSocket URL。
 
-第二个参数是工作目录，可选；如果不传，默认使用 `~/.qunce`。启动时会自动创建该目录，并在其中写入本地 SQLite 数据库 `agent.db`。
+工作目录通过 `--workspace` 传入，可选；如果不传，默认使用 `~/.qunce`。启动时会自动创建该目录，并在其中写入本地 SQLite 数据库 `agent.db`。
 
 用法：
 
 ```bash
-agentd <host:port|ws://server-host:8000/ws/agent> [workdir]
+agentd --link <host:port|ws://server-host:8000/ws/agent> [--workspace <workdir>] [--hello "<message>"]
 ```
 
 例如：
 
 ```bash
-agentd 127.0.0.1:8000
-agentd 127.0.0.1:8000 ~/.qunce
+agentd --link 127.0.0.1:8000
+agentd --link 127.0.0.1:8000 --workspace ~/.qunce
 ```
 
-如果不传参数，会直接输出 usage 并退出。
+如果不传 `--link`，会直接输出 usage 并退出。
 
 ## 默认行为
 

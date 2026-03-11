@@ -16,12 +16,6 @@ def running_turn_count(payload: dict[str, Any]) -> int:
     running_turn_ids = payload.get("running_turn_ids")
     if isinstance(running_turn_ids, list):
         return len(running_turn_ids)
-
-    legacy_running_turns = payload.get("running_turns")
-    if isinstance(legacy_running_turns, list):
-        return len(legacy_running_turns)
-    if isinstance(legacy_running_turns, int):
-        return legacy_running_turns
     return 0
 
 
@@ -30,6 +24,12 @@ def connection_status(node_id: str) -> str:
     if not node.get("approved", False):
         return "pending"
     return "online"
+
+
+def update_connected_node(node_id: str, payload: dict[str, Any]) -> None:
+    if state.get_node(node_id) is None:
+        raise ConnectionError(f"node {node_id} was removed")
+    update_node(node_id, payload)
 
 
 @sock.route("/ws/agent")
@@ -132,7 +132,7 @@ def agent_socket(ws: Any) -> None:
             payload = message.get("data", {})
 
             if message_type == "agent.state.report":
-                update_node(
+                update_connected_node(
                     node_id,
                     {
                         "status": connection_status(node_id),
@@ -143,7 +143,7 @@ def agent_socket(ws: Any) -> None:
                 continue
 
             if message_type == "agent.ping":
-                update_node(
+                update_connected_node(
                     node_id,
                     {
                         "status": connection_status(node_id),
@@ -169,7 +169,7 @@ def agent_socket(ws: Any) -> None:
                 turn_id = str(payload.get("turn_id", ""))
                 if turn_id:
                     mark_turn_started(turn_id=turn_id, node_id=node_id)
-                update_node(
+                update_connected_node(
                     node_id,
                     {
                         "status": connection_status(node_id),
@@ -184,7 +184,7 @@ def agent_socket(ws: Any) -> None:
                 output = str(payload.get("output", "")).strip()
                 if turn_id and output:
                     mark_turn_completed(turn_id=turn_id, node_id=node_id, output=output)
-                update_node(
+                update_connected_node(
                     node_id,
                     {
                         "status": connection_status(node_id),
@@ -208,5 +208,7 @@ def agent_socket(ws: Any) -> None:
             )
     except Exception:
         agent_connections.remove(node_id)
-        disconnected_status = "offline" if (state.get_node(node_id) or {}).get("approved", False) else "pending"
-        update_node(node_id, {"status": disconnected_status})
+        node = state.get_node(node_id)
+        if node is not None:
+            disconnected_status = "offline" if node.get("approved", False) else "pending"
+            update_node(node_id, {"status": disconnected_status})

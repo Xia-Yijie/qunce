@@ -11,42 +11,8 @@ class InMemoryState:
         self._lock = Lock()
         self.nodes: dict[str, dict] = {}
         self.turns: dict[str, dict] = {}
-        self.personas: list[dict] = [
-            {
-                "persona_id": "persona_architect",
-                "name": "架构师",
-                "role_summary": "负责从分层、边界和风险角度给出建议。",
-                "status": "active",
-            },
-            {
-                "persona_id": "persona_builder",
-                "name": "执行者",
-                "role_summary": "负责把方案收敛为可以直接开工的任务。",
-                "status": "active",
-            },
-        ]
-        self.rooms: dict[str, dict] = {
-            "room_lobby": {
-                "room_id": "room_lobby",
-                "name": "产品讨论组",
-                "mode": "mention",
-                "members": [
-                    {"persona_id": "persona_architect", "name": "架构师", "status": "idle"},
-                    {"persona_id": "persona_builder", "name": "执行者", "status": "idle"},
-                ],
-                "messages": [
-                    {
-                        "message_id": "msg_seed_1",
-                        "sender_type": "system",
-                        "sender_name": "系统",
-                        "content": "欢迎来到群策。先完成本地节点配对，再开始群聊式协作。",
-                        "status": "completed",
-                        "created_at": datetime.now(tz=UTC).isoformat(),
-                    }
-                ],
-                "turns": [],
-            }
-        }
+        self.personas: list[dict] = []
+        self.chats: dict[str, dict] = {}
 
     def upsert_node(self, node_id: str, payload: dict) -> dict:
         with self._lock:
@@ -78,9 +44,9 @@ class InMemoryState:
     def list_personas(self) -> list[dict]:
         return deepcopy(self.personas)
 
-    def add_room_message(
+    def add_chat_message(
         self,
-        room_id: str,
+        chat_id: str,
         *,
         sender_type: str,
         sender_name: str,
@@ -89,10 +55,10 @@ class InMemoryState:
         metadata: dict | None = None,
     ) -> dict | None:
         with self._lock:
-            room = self.rooms.get(room_id)
-            if room is None:
+            chat = self.chats.get(chat_id)
+            if chat is None:
                 return None
-            room["messages"].append(
+            chat["messages"].append(
                 {
                     "message_id": f"msg_{uuid4().hex}",
                     "sender_type": sender_type,
@@ -103,17 +69,17 @@ class InMemoryState:
                     "metadata": metadata or {},
                 }
             )
-            return deepcopy(room)
+            return deepcopy(chat)
 
-    def create_turn(self, room_id: str, *, content: str, node_id: str | None, sender_name: str) -> dict | None:
+    def create_turn(self, chat_id: str, *, content: str, node_id: str | None, sender_name: str) -> dict | None:
         with self._lock:
-            room = self.rooms.get(room_id)
-            if room is None:
+            chat = self.chats.get(chat_id)
+            if chat is None:
                 return None
             turn_id = f"turn_{uuid4().hex}"
             turn = {
                 "turn_id": turn_id,
-                "room_id": room_id,
+                "chat_id": chat_id,
                 "content": content,
                 "status": "queued",
                 "assigned_node_id": node_id,
@@ -122,7 +88,7 @@ class InMemoryState:
                 "updated_at": datetime.now(tz=UTC).isoformat(),
             }
             self.turns[turn_id] = turn
-            room.setdefault("turns", []).append(turn_id)
+            chat.setdefault("turns", []).append(turn_id)
             return deepcopy(turn)
 
     def update_turn(self, turn_id: str, payload: dict) -> dict | None:
@@ -141,12 +107,12 @@ class InMemoryState:
                 return None
             return deepcopy(turn)
 
-    def room_snapshot(self, room_id: str) -> dict | None:
+    def chat_snapshot(self, chat_id: str) -> dict | None:
         with self._lock:
-            room = self.rooms.get(room_id)
-            if room is None:
+            chat = self.chats.get(chat_id)
+            if chat is None:
                 return None
-            return deepcopy(room)
+            return deepcopy(chat)
 
 
 state = InMemoryState()

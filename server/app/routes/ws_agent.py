@@ -98,6 +98,7 @@ def agent_socket(ws: Any) -> None:
                 "node_id": node_id,
                 "name": username,
                 "hostname": hostname,
+                "work_dir": hello_payload.get("work_dir") or existing_node.get("work_dir", ""),
                 "platform": hello_payload.get("platform"),
                 "arch": hello_payload.get("arch"),
                 "agent_version": hello_payload.get("agent_version"),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from flask import abort, jsonify, request, send_from_directory
@@ -108,6 +110,95 @@ def create_persona() -> Any:
 @app.get("/api/nodes")
 def nodes() -> Any:
     return jsonify([node_summary_payload(node) for node in state.list_nodes()])
+
+
+@app.post("/api/nodes/<node_id>/workspace-check")
+def validate_node_workspace(node_id: str) -> Any:
+    node = state.get_node(node_id)
+    if node is None:
+        abort(404, "node_not_found")
+
+    payload = request.get_json(silent=True) or {}
+    raw_workspace_dir = str(payload.get("workspace_dir", "")).strip()
+    if not raw_workspace_dir:
+        abort(400, "workspace_dir_required")
+
+    workspace_dir = Path(raw_workspace_dir).expanduser()
+    if not workspace_dir.is_absolute():
+        return jsonify(
+            {
+                "ok": False,
+                "normalized_path": str(workspace_dir),
+                "message": "工作目录必须是绝对路径",
+            }
+        ), 200
+
+    if workspace_dir.exists():
+        if not workspace_dir.is_dir():
+            return jsonify(
+                {
+                    "ok": False,
+                    "normalized_path": str(workspace_dir),
+                    "message": "该路径已存在，但不是目录",
+                }
+            ), 200
+        if not os.access(workspace_dir, os.R_OK | os.W_OK | os.X_OK):
+            return jsonify(
+                {
+                    "ok": False,
+                    "normalized_path": str(workspace_dir),
+                    "message": "该目录当前不可读写",
+                }
+            ), 200
+        if any(workspace_dir.iterdir()):
+            return jsonify(
+                {
+                    "ok": False,
+                    "normalized_path": str(workspace_dir),
+                    "message": "该目录不是空目录",
+                }
+            ), 200
+        return jsonify(
+            {
+                "ok": True,
+                "normalized_path": str(workspace_dir),
+                "message": "目录可用：已存在且为空目录",
+            }
+        )
+
+    parent_dir = workspace_dir.parent
+    if not parent_dir.exists():
+        return jsonify(
+            {
+                "ok": False,
+                "normalized_path": str(workspace_dir),
+                "message": "父目录不存在，暂时不能在这里创建",
+            }
+        ), 200
+    if not parent_dir.is_dir():
+        return jsonify(
+            {
+                "ok": False,
+                "normalized_path": str(workspace_dir),
+                "message": "父路径不是目录",
+            }
+        ), 200
+    if not os.access(parent_dir, os.W_OK | os.X_OK):
+        return jsonify(
+            {
+                "ok": False,
+                "normalized_path": str(workspace_dir),
+                "message": "父目录没有创建权限",
+            }
+        ), 200
+
+    return jsonify(
+        {
+            "ok": True,
+            "normalized_path": str(workspace_dir),
+            "message": "目录可用：目标目录不存在，但可以创建",
+        }
+    )
 
 
 @app.post("/api/nodes/<node_id>/accept")

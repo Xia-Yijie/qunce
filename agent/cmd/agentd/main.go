@@ -174,6 +174,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		"username":      cfg.NodeName,
 		"hostname":      cfg.Hostname,
 		"hello_message": cfg.Hello,
+		"work_dir":      cfg.WorkDir,
 		"platform":      runtimePlatform(),
 		"arch":          runtimeArch(),
 		"agent_version": "0.1.0",

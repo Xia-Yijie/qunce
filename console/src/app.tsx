@@ -39,6 +39,7 @@ type NodeSummary = {
   approved: boolean;
   can_accept: boolean;
   hello_message: string;
+  work_dir?: string;
   platform?: string;
   arch?: string;
   last_seen_at?: string;
@@ -70,6 +71,12 @@ type CreatePersonaPayload = {
   agent_label: string;
 };
 
+type WorkspaceValidation = {
+  ok: boolean;
+  normalized_path: string;
+  message: string;
+};
+
 type ChatSnapshot = {
   chat_id: string;
   name: string;
@@ -94,9 +101,7 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 };
 
 const agentOptions = [
-  { key: "codex-general", label: "通用协作", summary: "适合日常协作、执行和跟进事项。" },
-  { key: "codex-builder", label: "实现型", summary: "偏向直接落地代码、推进改动。" },
-  { key: "codex-analyst", label: "分析型", summary: "偏向梳理信息、拆解问题和方案。" },
+  { key: "codex", label: "codex" },
 ];
 
 const api = {
@@ -116,6 +121,12 @@ const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }),
+  validateWorkspace: (nodeId: string, workspaceDir: string) =>
+    fetchJson<WorkspaceValidation>(`/api/nodes/${nodeId}/workspace-check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_dir: workspaceDir }),
     }),
   sendMessage: (chatId: string, content: string) =>
     fetchJson<{ ok: boolean }>(`/api/chats/${chatId}/messages`, {
@@ -325,6 +336,16 @@ const getNodeName = (node: Pick<NodeSummary, "name" | "hostname">) => {
   return fallback || node.name;
 };
 
+const joinWorkspacePath = (baseDir: string, name: string) => {
+  const trimmedBase = baseDir.trim().replace(/[\\/]+$/, "");
+  const sanitizedName = name.trim().replace(/[<>:"/\\|?*]+/g, "_") || "friend";
+  if (!trimmedBase) {
+    return sanitizedName;
+  }
+  const separator = trimmedBase.includes("\\") ? "\\" : "/";
+  return `${trimmedBase}${separator}${sanitizedName}`;
+};
+
 const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "hostname">) => {
   const remark = node.remark.trim();
   if (remark) {
@@ -437,7 +458,6 @@ const DirectoryLayout = ({
   onSelect,
   renderRow,
   detail,
-  toolbarActions,
 }: {
   title: string;
   sections: Array<{ key: string; title: string; defaultCollapsed?: boolean; items: Array<{ id: string }> }>;
@@ -445,7 +465,6 @@ const DirectoryLayout = ({
   onSelect: (id: string) => void;
   renderRow: (id: string, active: boolean) => React.ReactNode;
   detail: React.ReactNode;
-  toolbarActions?: React.ReactNode;
 }) => {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(sections.map((section) => [section.key, section.defaultCollapsed ?? false])),
@@ -473,7 +492,6 @@ const DirectoryLayout = ({
             <div className="conversation-search">搜索</div>
             <QuickCreateMenu />
           </div>
-          {toolbarActions ? <div className="directory-toolbar-actions">{toolbarActions}</div> : null}
         </div>
         <div className="directory-sections">
           {sections.map((section) => {
@@ -725,6 +743,8 @@ const FriendWizard = ({
   const approvedNodes = useMemo(() => nodes.filter((node) => node.approved), [nodes]);
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [validatingWorkspace, setValidatingWorkspace] = useState(false);
+  const [workspaceNotice, setWorkspaceNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [draft, setDraft] = useState<CreatePersonaPayload>({
     name: "",
     node_id: "",
@@ -739,6 +759,8 @@ const FriendWizard = ({
     if (!open) {
       setStep(0);
       setSaving(false);
+      setValidatingWorkspace(false);
+      setWorkspaceNotice(null);
       setDraft({
         name: "",
         node_id: "",
@@ -758,10 +780,11 @@ const FriendWizard = ({
   }, [approvedNodes, draft.node_id]);
 
   const selectedAgent = agentOptions.find((item) => item.key === draft.agent_key) ?? agentOptions[0];
+  const selectedNode = approvedNodes.find((node) => node.node_id === draft.node_id) ?? null;
   const canContinue =
     (step === 0 && Boolean(draft.name.trim()) && Boolean(draft.node_id)) ||
     (step === 1 && Boolean(draft.workspace_dir.trim())) ||
-    (step === 2 && Boolean(draft.role_summary.trim())) ||
+    (step === 2 && Boolean(draft.system_prompt.trim())) ||
     step === 3;
 
   const submit = async () => {
@@ -771,7 +794,7 @@ const FriendWizard = ({
         ...draft,
         name: draft.name.trim(),
         workspace_dir: draft.workspace_dir.trim(),
-        role_summary: draft.role_summary.trim(),
+        role_summary: draft.system_prompt.trim(),
         system_prompt: draft.system_prompt.trim(),
         agent_label: selectedAgent.label,
       });
@@ -784,22 +807,58 @@ const FriendWizard = ({
     }
   };
 
+  const goNext = async () => {
+    if (step !== 1) {
+      setStep((current) => current + 1);
+      return;
+    }
+
+    const workspaceDir = draft.workspace_dir.trim();
+    if (!draft.node_id || !workspaceDir) {
+      return;
+    }
+
+    setValidatingWorkspace(true);
+    setWorkspaceNotice(null);
+    try {
+      const result = await api.validateWorkspace(draft.node_id, workspaceDir);
+      setWorkspaceNotice({ ok: result.ok, text: result.message });
+      if (!result.ok) {
+        return;
+      }
+      if (result.normalized_path && result.normalized_path !== draft.workspace_dir) {
+        setDraft((current) => ({ ...current, workspace_dir: result.normalized_path }));
+      }
+      setStep((current) => current + 1);
+    } catch (error) {
+      setWorkspaceNotice({
+        ok: false,
+        text: error instanceof Error ? error.message : "目录校验失败",
+      });
+    } finally {
+      setValidatingWorkspace(false);
+    }
+  };
+
   return (
     <Modal open={open} onCancel={() => !saving && onClose()} footer={null} centered width={640} title="添加朋友" destroyOnHidden>
       <div className="friend-wizard">
-        <Steps current={step} size="small" items={[{ title: "基本信息" }, { title: "工作目录" }, { title: "人设" }, { title: "智能体" }]} />
+        <Steps current={step} size="small" items={[{ title: "基本信息" }, { title: "工作目录" }, { title: "基础设定" }, { title: "底层工具" }]} />
         <div className="friend-wizard-panel">
           {step === 0 ? (
             <div className="wizard-field-stack">
               <Input
-                placeholder="名称，例如：产品搭子"
+                placeholder="名称，例如：爱因斯坦"
                 value={draft.name}
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
               />
               <Select
                 placeholder="选择一个已接收节点"
                 value={draft.node_id || undefined}
-                onChange={(value) => setDraft((current) => ({ ...current, node_id: value }))}
+                onChange={(value) => {
+                  setWorkspaceNotice(null);
+                  setDraft((current) => ({ ...current, node_id: value }));
+                }}
                 options={approvedNodes.map((node) => ({
                   value: node.node_id,
                   label: `${getNodeDisplayName(node)} · ${node.status_label}`,
@@ -813,38 +872,73 @@ const FriendWizard = ({
               <Input
                 placeholder="工作目录，例如：C:\\Users\\NINGMEI\\Projects\\demo"
                 value={draft.workspace_dir}
-                onChange={(event) => setDraft((current) => ({ ...current, workspace_dir: event.target.value }))}
+                onChange={(event) => {
+                  setWorkspaceNotice(null);
+                  setDraft((current) => ({ ...current, workspace_dir: event.target.value }));
+                }}
               />
+              {selectedNode?.work_dir ? (
+                <div className="wizard-path-actions">
+                  <Button
+                    onClick={() => {
+                      setWorkspaceNotice(null);
+                      setDraft((current) => ({ ...current, workspace_dir: selectedNode.work_dir ?? "" }));
+                    }}
+                  >
+                    使用节点目录
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setWorkspaceNotice(null);
+                      setDraft((current) => ({
+                        ...current,
+                        workspace_dir: joinWorkspacePath(selectedNode.work_dir ?? "", draft.name),
+                      }));
+                    }}
+                  >
+                    在节点目录下新建同名目录
+                  </Button>
+                </div>
+              ) : null}
+              {selectedNode?.work_dir ? (
+                <Typography.Text type="secondary" className="wizard-path-hint">
+                  节点默认目录：{selectedNode.work_dir}
+                </Typography.Text>
+              ) : null}
+              <Typography.Text type="secondary" className="wizard-path-hint">
+                继续前会检查这个目录是否可写，且必须是未创建目录或空目录。
+              </Typography.Text>
+              {workspaceNotice ? (
+                <div className={`wizard-path-notice ${workspaceNotice.ok ? "ok" : "error"}`}>{workspaceNotice.text}</div>
+              ) : null}
             </div>
           ) : null}
           {step === 2 ? (
             <div className="wizard-field-stack">
-              <Input
-                placeholder="角色简介，例如：负责把需求整理成可执行计划"
-                value={draft.role_summary}
-                onChange={(event) => setDraft((current) => ({ ...current, role_summary: event.target.value }))}
-              />
               <Input.TextArea
                 autoSize={{ minRows: 4, maxRows: 8 }}
-                placeholder="详细人设"
+                placeholder="基础设定，例如：你是一位严谨的科学家，回答时重视事实、推导和清晰表达。"
                 value={draft.system_prompt}
-                onChange={(event) => setDraft((current) => ({ ...current, system_prompt: event.target.value }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    system_prompt: event.target.value,
+                    role_summary: event.target.value.trim() || current.role_summary,
+                  }))
+                }
               />
             </div>
           ) : null}
           {step === 3 ? (
-            <div className="wizard-agent-grid">
-              {agentOptions.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className={`wizard-agent-card ${draft.agent_key === item.key ? "active" : ""}`}
-                  onClick={() => setDraft((current) => ({ ...current, agent_key: item.key, agent_label: item.label }))}
-                >
-                  <span className="wizard-agent-title">{item.label}</span>
-                  <span className="wizard-agent-summary">{item.summary}</span>
-                </button>
-              ))}
+            <div className="wizard-field-stack">
+              <Select
+                value={draft.agent_key}
+                onChange={(value) => {
+                  const selected = agentOptions.find((item) => item.key === value) ?? agentOptions[0];
+                  setDraft((current) => ({ ...current, agent_key: selected.key, agent_label: selected.label }));
+                }}
+                options={agentOptions.map((item) => ({ value: item.key, label: item.label }))}
+              />
             </div>
           ) : null}
         </div>
@@ -853,7 +947,7 @@ const FriendWizard = ({
             {step === 0 ? "取消" : "上一步"}
           </Button>
           {step < 3 ? (
-            <Button type="primary" disabled={!canContinue || saving} onClick={() => setStep((current) => current + 1)}>
+            <Button type="primary" disabled={!canContinue || saving || validatingWorkspace} onClick={() => void goNext()}>
               下一步
             </Button>
           ) : (
@@ -1001,13 +1095,6 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         sections={sections}
         selectedId={selectedEntry?.id ?? null}
         onSelect={setSelectedEntryId}
-        toolbarActions={
-          defaultKind === "agent" ? (
-            <Button className="friend-create-button" type="primary" onClick={() => setSearchParams({ create: "friend" })}>
-              添加朋友
-            </Button>
-          ) : undefined
-        }
         renderRow={(id) => {
           const entry = entries.find((item) => item.id === id);
           if (!entry) return null;

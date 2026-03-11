@@ -60,6 +60,7 @@ def node_summary_payload(node: dict[str, Any]) -> dict[str, Any]:
         "approved": approved,
         "can_accept": not approved,
         "hello_message": node.get("hello_message", ""),
+        "work_dir": node.get("work_dir", ""),
         "platform": node.get("platform"),
         "arch": node.get("arch"),
         "last_seen_at": node.get("last_seen_at"),

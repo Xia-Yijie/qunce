@@ -410,17 +410,6 @@ a {
   padding: 14px 12px 10px;
 }
 
-.directory-toolbar-actions {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 10px;
-}
-
-.friend-create-button {
-  border-radius: 999px;
-  box-shadow: none;
-}
-
 .directory-search {
   height: 30px;
   border-radius: 6px;
@@ -786,6 +775,35 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.wizard-path-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wizard-path-hint {
+  line-height: 1.6;
+}
+
+.wizard-path-notice {
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.wizard-path-notice.ok {
+  background: #f3fbf6;
+  color: #246b3d;
+  border: 1px solid rgba(36, 107, 61, 0.12);
+}
+
+.wizard-path-notice.error {
+  background: #fff5f5;
+  color: #a33a3a;
+  border: 1px solid rgba(163, 58, 58, 0.12);
 }
 
 .wizard-agent-grid {

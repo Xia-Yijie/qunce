@@ -14,8 +14,10 @@ def meta_payload(*, app_name: str, app_version: str) -> dict[str, Any]:
 def chat_summary_payload(chat: dict[str, Any]) -> dict[str, Any]:
     visible_messages = [message for message in chat.get("messages", []) if message.get("sender_type") != "system"]
     last_message_at = None
+    last_message_preview = None
     if visible_messages:
         last_message_at = visible_messages[-1].get("created_at")
+        last_message_preview = str(visible_messages[-1].get("content", "")).strip() or None
     return {
         "chat_id": chat["chat_id"],
         "name": chat["name"],
@@ -24,9 +26,11 @@ def chat_summary_payload(chat: dict[str, Any]) -> dict[str, Any]:
         "pinned": bool(chat.get("pinned", False)),
         "dnd": bool(chat.get("dnd", False)),
         "marked_unread": bool(chat.get("marked_unread", False)),
+        "unread_count": int(chat.get("unread_count", 0)),
         "member_count": len(chat.get("members", [])),
         "message_count": len(visible_messages),
         "last_message_at": last_message_at,
+        "last_message_preview": last_message_preview,
     }
 
 
@@ -84,6 +88,7 @@ def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
     payload["pinned"] = bool(payload.get("pinned", False))
     payload["dnd"] = bool(payload.get("dnd", False))
     payload["marked_unread"] = bool(payload.get("marked_unread", False))
+    payload["unread_count"] = int(payload.get("unread_count", 0))
     return payload
 
 

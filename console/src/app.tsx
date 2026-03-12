@@ -32,9 +32,11 @@ type ChatSummary = {
   pinned?: boolean;
   dnd?: boolean;
   marked_unread?: boolean;
+  unread_count?: number;
   member_count: number;
   message_count: number;
   last_message_at?: string | null;
+  last_message_preview?: string | null;
 };
 
 type NodeSummary = {
@@ -105,6 +107,7 @@ type ChatSnapshot = {
   pinned?: boolean;
   dnd?: boolean;
   marked_unread?: boolean;
+  unread_count?: number;
   members: ChatMember[];
   messages: Array<{
     message_id: string;
@@ -180,7 +183,25 @@ const getPersonaAvatarConfig = (persona: Pick<PersonaSummary, "name" | "avatar_s
   color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
 });
 
-const formatMutedName = (name: string, muted?: boolean) => (muted ? `[禁言]${name}` : name);
+const renderMutedName = (name: string, muted?: boolean) => (
+  <span className="muted-name">
+    {muted ? <span className="muted-name-badge">禁言</span> : null}
+    <span className="muted-name-text">{name}</span>
+  </span>
+);
+
+const sortChats = (chats: ChatSummary[]) =>
+  [...chats].sort((left, right) => {
+    if (Boolean(left.pinned) !== Boolean(right.pinned)) {
+      return left.pinned ? -1 : 1;
+    }
+    const rightTime = right.last_message_at ?? "";
+    const leftTime = left.last_message_at ?? "";
+    if (rightTime !== leftTime) {
+      return rightTime.localeCompare(leftTime);
+    }
+    return right.chat_id.localeCompare(left.chat_id);
+  });
 
 const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSnapshot): ChatSummary => ({
   ...chat,
@@ -189,11 +210,16 @@ const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSnapshot)
   pinned: snapshot.pinned,
   dnd: snapshot.dnd,
   marked_unread: snapshot.marked_unread,
+  unread_count: snapshot.unread_count ?? 0,
   member_count: snapshot.members.length,
   message_count: snapshot.messages.length,
   last_message_at:
     snapshot.messages.length > 0
       ? snapshot.messages[snapshot.messages.length - 1]?.created_at
+      : null,
+  last_message_preview:
+    snapshot.messages.length > 0
+      ? snapshot.messages[snapshot.messages.length - 1]?.content ?? null
       : null,
 });
 
@@ -261,6 +287,16 @@ const api = {
   clearChatHistory: (chatId: string) =>
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/messages`, {
       method: "DELETE",
+    }),
+  markChatRead: (chatId: string) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/read`, {
+      method: "POST",
+    }),
+  updateChatName: (chatId: string, name: string) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/name`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
     }),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
   createPersona: (payload: CreatePersonaPayload) =>
@@ -680,7 +716,7 @@ const AddMembersDialog = ({
     </Modal>
   );
 };
-const useConsoleSocket = (chatId: string | null) => {
+const useConsoleSocket = (chatIds: string[]) => {
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
   const [lastNotice, setLastNotice] = useState("等待连接群聊通道");
@@ -701,7 +737,7 @@ const useConsoleSocket = (chatId: string | null) => {
           ts: new Date().toISOString(),
           source: { kind: "console", id: "browser" },
           target: { kind: "server", id: "main" },
-          data: { chat_ids: chatId ? [chatId] : [], watch_nodes: true },
+          data: { chat_ids: chatIds, watch_nodes: true },
         }),
       );
     });
@@ -721,18 +757,10 @@ const useConsoleSocket = (chatId: string | null) => {
         const data = payload.data as ChatSnapshot;
         queryClient.setQueryData(["chat", data.chat_id], data);
         queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-          (previous ?? []).map((chat) =>
-            chat.chat_id === data.chat_id
-              ? {
-                  ...chat,
-                  member_count: data.members.length,
-                  message_count: data.messages.length,
-                  last_message_at:
-                    data.messages.length > 0
-                      ? data.messages[data.messages.length - 1]?.created_at
-                      : (chat.last_message_at ?? null),
-                }
-              : chat,
+          sortChats(
+            (previous ?? []).map((chat) =>
+              chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat,
+            ),
           ),
         );
       }
@@ -749,14 +777,14 @@ const useConsoleSocket = (chatId: string | null) => {
     });
 
     return () => socket.close();
-  }, [chatId, queryClient]);
+  }, [chatIds.join("|"), queryClient]);
 
   return { connected, lastNotice };
 };
 
 const getChatPreview = (chat: ChatSummary) => {
-  if (chat.message_count > 0) {
-    return `${chat.member_count} 个成员，最近有新消息`;
+  if (chat.last_message_preview?.trim()) {
+    return chat.last_message_preview.trim();
   }
   return "还没有消息，等待第一轮讨论";
 };
@@ -1069,7 +1097,12 @@ const ConversationList = ({
           >
             <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
               <Link to={getChatPath(chat.chat_id)} className="conversation-link">
-                <Badge dot={Boolean(chat.marked_unread)} offset={[-4, 36]}>
+                <Badge
+                  count={chat.dnd ? 0 : (chat.unread_count ?? 0) > 0 ? chat.unread_count : undefined}
+                  dot={!chat.dnd && (chat.unread_count ?? 0) === 0 && Boolean(chat.marked_unread)}
+                  size="default"
+                  offset={[-2, 34]}
+                >
                   <div className="conversation-avatar">{chat.name.slice(0, 1)}</div>
                 </Badge>
                 <div className="conversation-copy">
@@ -1222,7 +1255,6 @@ const MessageBubble = ({
   };
 }) => {
   const tone = getMessageTone(senderType);
-  const displaySenderName = formatMutedName(senderName, member?.muted);
   if (tone === "event") {
     return (
       <div className="message-row event">
@@ -1240,7 +1272,7 @@ const MessageBubble = ({
         {readReceipt.read_by.length > 0 ? (
           readReceipt.read_by.map((member) => (
             <div key={`read-${member.persona_id}`} className="message-read-member">
-              {formatMutedName(member.name, member.muted)}
+              {renderMutedName(member.name, member.muted)}
             </div>
           ))
         ) : (
@@ -1252,7 +1284,7 @@ const MessageBubble = ({
         {readReceipt.unread_by.length > 0 ? (
           readReceipt.unread_by.map((member) => (
             <div key={`unread-${member.persona_id}`} className="message-read-member">
-              {formatMutedName(member.name, member.muted)}
+              {renderMutedName(member.name, member.muted)}
             </div>
           ))
         ) : (
@@ -1285,7 +1317,7 @@ const MessageBubble = ({
       )}
       <div className="message-body">
         <Flex align="center" gap={10}>
-          <Typography.Text strong>{displaySenderName}</Typography.Text>
+          <Typography.Text strong>{renderMutedName(senderName, member?.muted)}</Typography.Text>
           <Typography.Text type="secondary" className="message-time">
             {formatMessageTime(createdAt)}
           </Typography.Text>
@@ -1324,6 +1356,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const [detailOpen, setDetailOpen] = useState(false);
   const [memberKeyword, setMemberKeyword] = useState("");
   const [addMembersOpen, setAddMembersOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
@@ -1344,18 +1377,33 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   }, [activeChatId, snapshot?.messages.length]);
 
   useEffect(() => {
+    if (!activeChatId || !snapshot) {
+      return;
+    }
+    if ((snapshot.unread_count ?? 0) === 0 && !snapshot.marked_unread) {
+      return;
+    }
+    void api.markChatRead(activeChatId).then((nextSnapshot) => {
+      syncChatSnapshot(nextSnapshot);
+    });
+  }, [activeChatId, snapshot?.messages.length, snapshot?.unread_count, snapshot?.marked_unread]);
+
+  useEffect(() => {
     setPendingMuted(null);
     setMuting(false);
     setDetailOpen(false);
     setMemberKeyword("");
     setAddMembersOpen(false);
+    setRenaming(false);
   }, [activeChatId]);
 
   const syncChatSnapshot = (nextSnapshot: ChatSnapshot) => {
     queryClient.setQueryData(["chat", nextSnapshot.chat_id], nextSnapshot);
     queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-      (previous ?? []).map((chat) =>
-        chat.chat_id === nextSnapshot.chat_id ? applyChatSummaryFromSnapshot(chat, nextSnapshot) : chat,
+      sortChats(
+        (previous ?? []).map((chat) =>
+          chat.chat_id === nextSnapshot.chat_id ? applyChatSummaryFromSnapshot(chat, nextSnapshot) : chat,
+        ),
       ),
     );
   };
@@ -1455,7 +1503,6 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     return `${member.name} ${member.persona_id}`.toLowerCase().includes(query);
   });
   const detailMetaItems = [
-    { label: "聊天名称", value: snapshot.name },
     { label: "成员数量", value: `${snapshot.members.length} 人` },
     { label: "全体禁言", value: effectiveMuted ? "已开启" : "未开启" },
   ];
@@ -1551,6 +1598,44 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
       },
     });
   };
+  const renameChat = () => {
+    if (!activeChatId || renaming) {
+      return;
+    }
+    let draftName = snapshot.name;
+    Modal.confirm({
+      title: "编辑聊天名称",
+      centered: true,
+      okText: "保存",
+      cancelText: "取消",
+      content: (
+        <Input
+          autoFocus
+          defaultValue={snapshot.name}
+          maxLength={40}
+          placeholder="输入聊天名称"
+          onChange={(event) => {
+            draftName = event.target.value;
+          }}
+        />
+      ),
+      onOk: async () => {
+        const nextName = draftName.trim();
+        if (!nextName) {
+          message.error("聊天名称不能为空");
+          throw new Error("chat_name_required");
+        }
+        setRenaming(true);
+        try {
+          const nextSnapshot = await api.updateChatName(activeChatId, nextName);
+          syncChatSnapshot(nextSnapshot);
+          message.success("已更新聊天名称");
+        } finally {
+          setRenaming(false);
+        }
+      },
+    });
+  };
   async function updateConversationPreference(
     chat: ChatSummary,
     payload: { pinned?: boolean; dnd?: boolean; markedUnread?: boolean },
@@ -1630,10 +1715,13 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
       <div className="chat-stage">
         <section className="chat-pane">
           <header className="chat-header">
-            <div>
+            <div className="chat-header-copy">
               <Typography.Title level={4} style={{ margin: 0 }}>
                 {snapshot.name}
               </Typography.Title>
+              <Button type="link" size="small" className="chat-rename-button" onClick={renameChat} loading={renaming}>
+                编辑
+              </Button>
             </div>
             <button
               type="button"
@@ -1732,7 +1820,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
                   ) : (
                     <div className="chat-detail-avatar">{member.name.slice(0, 1)}</div>
                   )}
-                  <div className="chat-detail-name">{formatMutedName(member.name, member.muted)}</div>
+                  <div className="chat-detail-name">{renderMutedName(member.name, member.muted)}</div>
                 </div>
               ))}
               <button
@@ -1747,6 +1835,15 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               </button>
             </div>
             <div className="chat-detail-sections">
+              <section className="chat-detail-section">
+                <div className="chat-detail-label">聊天名称</div>
+                <div className="chat-detail-value chat-detail-name-row">
+                  <span>{snapshot.name}</span>
+                  <Button type="link" size="small" onClick={renameChat} loading={renaming}>
+                    编辑
+                  </Button>
+                </div>
+              </section>
               {detailMetaItems.map((item) => (
                 <section key={item.label} className="chat-detail-section">
                   <div className="chat-detail-label">{item.label}</div>
@@ -2201,7 +2298,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     const chat = await api.createChat({ personaIds: [persona.persona_id] });
     queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
       const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
-      return [chat, ...others];
+      return sortChats([{ ...chat, unread_count: 0 }, ...others]);
     });
     navigate(getChatPath(chat.chat_id));
   };
@@ -2394,7 +2491,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     className="profile-action-button profile-accept-button"
                     onClick={() => void startChatWithPersona(selectedEntry)}
                   >
-                    发起群聊
+                    发起聊天
                   </Button>
                   <Button className="profile-action-button profile-danger-button" onClick={() => void deletePersona(selectedEntry)}>
                     删除智能体
@@ -2473,6 +2570,7 @@ const AppShell = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
   const activeChatId = useMemo(() => {
@@ -2485,7 +2583,8 @@ const AppShell = () => {
     }
     return null;
   }, [location.pathname]);
-  const consoleSocket = useConsoleSocket(activeChatId);
+  const watchedChatIds = useMemo(() => chats.map((chat) => chat.chat_id), [chats]);
+  const consoleSocket = useConsoleSocket(watchedChatIds);
   const selectedKey = useMemo(() => {
     if (location.pathname === "/chats" || location.pathname.startsWith("/chats/")) {
       return "/chats";
@@ -2504,7 +2603,7 @@ const AppShell = () => {
   const handleCreatedChat = (chat: ChatSummary) => {
     queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
       const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
-      return [chat, ...others];
+      return sortChats([{ ...chat, unread_count: 0 }, ...others]);
     });
     closeCreateChat();
     navigate(getChatPath(chat.chat_id));

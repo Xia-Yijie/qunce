@@ -187,6 +187,35 @@ def update_chat_preferences(chat_id: str) -> Any:
     return jsonify(chat_snapshot_payload(snapshot)), 200
 
 
+@app.post("/api/chats/<chat_id>/name")
+def update_chat_name(chat_id: str) -> Any:
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        abort(400, "chat_name_required")
+
+    chat = state.update_chat(chat_id, {"name": name})
+    if chat is None:
+        abort(404, "chat_not_found")
+    snapshot = state.chat_snapshot(chat_id)
+    if snapshot is None:
+        abort(404, "chat_not_found")
+    broadcast_chat_snapshot(chat_id)
+    return jsonify(chat_snapshot_payload(snapshot)), 200
+
+
+@app.post("/api/chats/<chat_id>/read")
+def mark_chat_read(chat_id: str) -> Any:
+    chat = state.mark_chat_read(chat_id)
+    if chat is None:
+        abort(404, "chat_not_found")
+    snapshot = state.chat_snapshot(chat_id)
+    if snapshot is None:
+        abort(404, "chat_not_found")
+    broadcast_chat_snapshot(chat_id)
+    return jsonify(chat_snapshot_payload(snapshot)), 200
+
+
 @app.delete("/api/chats/<chat_id>/messages")
 def clear_chat_history(chat_id: str) -> Any:
     snapshot = state.clear_chat_history(chat_id)

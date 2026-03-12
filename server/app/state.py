@@ -105,6 +105,9 @@ class StateStore:
                     if key not in payload:
                         payload[key] = False
                         changed = True
+                if "unread_count" not in payload:
+                    payload["unread_count"] = 0
+                    changed = True
                 normalized_members = []
                 for member in members:
                     normalized_member = dict(member)
@@ -304,6 +307,7 @@ class StateStore:
             chat["pinned"] = False
             chat["dnd"] = False
             chat["marked_unread"] = False
+            chat["unread_count"] = 0
             self._conn.execute(
                 """
                 INSERT INTO chats(chat_id, payload, created_at, updated_at)
@@ -368,6 +372,11 @@ class StateStore:
                 """,
                 (message["message_id"], chat_id, self._dump(message), created_at),
             )
+            if sender_type == "agent":
+                chat["unread_count"] = int(chat.get("unread_count", 0)) + 1
+            elif sender_type == "user":
+                chat["unread_count"] = 0
+                chat["marked_unread"] = False
             chat["updated_at"] = created_at
             self._conn.execute(
                 "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
@@ -399,12 +408,30 @@ class StateStore:
             now = self._now()
             self._conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
             self._conn.execute("DELETE FROM turns WHERE chat_id = ?", (chat_id,))
+            chat["unread_count"] = 0
+            chat["marked_unread"] = False
             chat["updated_at"] = now
             self._conn.execute(
                 "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
                 (self._dump(chat), now, chat_id),
             )
             return deepcopy({**chat, "messages": [], "turns": []})
+
+    def mark_chat_read(self, chat_id: str) -> dict | None:
+        with self._lock, self._conn:
+            chat = self._get_payload("chats", "chat_id", chat_id)
+            if chat is None:
+                return None
+
+            now = self._now()
+            chat["unread_count"] = 0
+            chat["marked_unread"] = False
+            chat["updated_at"] = now
+            self._conn.execute(
+                "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
+                (self._dump(chat), now, chat_id),
+            )
+            return deepcopy(chat)
 
     def add_members_to_chat(self, chat_id: str, personas: list[dict]) -> dict | None:
         with self._lock, self._conn:

@@ -13,7 +13,6 @@ import {
   Modal,
   Popover,
   Select,
-  Space,
   Spin,
   Steps,
   Tooltip,
@@ -29,11 +28,9 @@ import {
   DEFAULT_PERSONA_AVATAR_TEXT,
   agentOptions,
   applyChatSummaryFromSnapshot,
-  formatConversationTime,
   formatMessageTime,
   formatReadableTime,
   getChatPath,
-  getChatPreview,
   getNodeDisplayName,
   getNodeName,
   getPendingNodeCount,
@@ -52,7 +49,6 @@ import type {
   CreatePersonaPayload,
   NodeSummary,
   PersonaSummary,
-  WorkspaceValidation,
 } from "./types";
 import { useConsoleSocket } from "./use-console-socket";
 
@@ -144,8 +140,6 @@ const railItems = [
   { key: "/chats", icon: <ChatRailIcon />, description: "聊天" },
   { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
 ];
-
-const settingsRailItem = { key: "/settings/runtime", icon: <SettingsRailIcon />, description: "设置" };
 
 const StartChatDialog = ({
   open,
@@ -534,7 +528,6 @@ const getMessageTone = (senderType: string) => {
 
 
 const DirectoryLayout = ({
-  title,
   sections,
   selectedId,
   onSelect,
@@ -547,11 +540,10 @@ const DirectoryLayout = ({
   searchSubtitle,
   searchResults,
 }: {
-  title: string;
   sections: Array<{ key: string; title: string; defaultCollapsed?: boolean; items: Array<{ id: string }> }>;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  renderRow: (id: string, active: boolean) => React.ReactNode;
+  renderRow: (id: string) => React.ReactNode;
   detail: React.ReactNode;
   searchValue: string;
   onSearchChange: (value: string) => void;
@@ -637,7 +629,7 @@ const DirectoryLayout = ({
                               }
                             }}
                           >
-                            {renderRow(item.id, selectedId === item.id)}
+                            {renderRow(item.id)}
                           </div>
                         </List.Item>
                       )}
@@ -1777,7 +1769,6 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   return (
     <>
       <DirectoryLayout
-        title="智能体 / 节点"
         sections={sections}
         selectedId={selectedEntry?.id ?? null}
         onSelect={setSelectedEntryId}
@@ -2112,7 +2103,9 @@ const AppShell = () => {
               aria-label="打开设置"
               onClick={() => setSettingsOpen(true)}
             >
-              <span className="rail-glyph">{settingsRailItem.icon}</span>
+              <span className="rail-glyph">
+                <SettingsRailIcon />
+              </span>
             </button>
           </div>
         </aside>

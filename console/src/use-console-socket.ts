@@ -34,7 +34,7 @@ export const useConsoleSocket = (chatIds: string[]) => {
       const payload = JSON.parse(event.data) as { type: string; data?: unknown };
       if (payload.type === "server.notice") {
         const data = (payload.data ?? {}) as Record<string, unknown>;
-        setLastNotice(String(data.message ?? "收到服务器通知"));
+        setLastNotice(String(data.message ?? "收到服务端通知"));
       }
       if (payload.type === "server.node.updated") {
         setLastNotice("节点状态已同步");

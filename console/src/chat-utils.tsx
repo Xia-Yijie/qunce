@@ -1,8 +1,6 @@
-import type { ChatSnapshot, ChatSummary, ChatMember, NodeSummary, PersonaSummary } from "./types";
+import type { ChatSnapshot, ChatSummary, NodeSummary, PersonaSummary } from "./types";
 
-export const agentOptions = [
-  { key: "codex", label: "codex" },
-];
+export const agentOptions = [{ key: "codex", label: "codex" }];
 
 export const DEFAULT_PERSONA_AVATAR_BG = "#d9e6f8";
 export const DEFAULT_PERSONA_AVATAR_TEXT = "#31547e";

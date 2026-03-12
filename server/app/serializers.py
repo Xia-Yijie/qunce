@@ -21,6 +21,9 @@ def chat_summary_payload(chat: dict[str, Any]) -> dict[str, Any]:
         "name": chat["name"],
         "mode": chat["mode"],
         "muted": bool(chat.get("muted", False)),
+        "pinned": bool(chat.get("pinned", False)),
+        "dnd": bool(chat.get("dnd", False)),
+        "marked_unread": bool(chat.get("marked_unread", False)),
         "member_count": len(chat.get("members", [])),
         "message_count": len(visible_messages),
         "last_message_at": last_message_at,
@@ -78,6 +81,9 @@ def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
 
     payload["messages"] = messages
     payload["muted"] = bool(payload.get("muted", False))
+    payload["pinned"] = bool(payload.get("pinned", False))
+    payload["dnd"] = bool(payload.get("dnd", False))
+    payload["marked_unread"] = bool(payload.get("marked_unread", False))
     return payload
 
 

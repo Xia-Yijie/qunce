@@ -29,6 +29,9 @@ type ChatSummary = {
   name: string;
   mode: string;
   muted?: boolean;
+  pinned?: boolean;
+  dnd?: boolean;
+  marked_unread?: boolean;
   member_count: number;
   message_count: number;
   last_message_at?: string | null;
@@ -99,6 +102,9 @@ type ChatSnapshot = {
   name: string;
   mode: string;
   muted?: boolean;
+  pinned?: boolean;
+  dnd?: boolean;
+  marked_unread?: boolean;
   members: ChatMember[];
   messages: Array<{
     message_id: string;
@@ -176,6 +182,21 @@ const getPersonaAvatarConfig = (persona: Pick<PersonaSummary, "name" | "avatar_s
 
 const formatMutedName = (name: string, muted?: boolean) => (muted ? `[禁言]${name}` : name);
 
+const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSnapshot): ChatSummary => ({
+  ...chat,
+  name: snapshot.name,
+  muted: snapshot.muted,
+  pinned: snapshot.pinned,
+  dnd: snapshot.dnd,
+  marked_unread: snapshot.marked_unread,
+  member_count: snapshot.members.length,
+  message_count: snapshot.messages.length,
+  last_message_at:
+    snapshot.messages.length > 0
+      ? snapshot.messages[snapshot.messages.length - 1]?.created_at
+      : null,
+});
+
 const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
   createChat: (payload: { personaIds: string[]; name?: string }) =>
@@ -226,6 +247,20 @@ const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ muted, actor_name: "群成员" }),
+    }),
+  updateChatPreferences: (chatId: string, payload: { pinned?: boolean; dnd?: boolean; markedUnread?: boolean }) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/preferences`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(payload.pinned === undefined ? {} : { pinned: payload.pinned }),
+        ...(payload.dnd === undefined ? {} : { dnd: payload.dnd }),
+        ...(payload.markedUnread === undefined ? {} : { marked_unread: payload.markedUnread }),
+      }),
+    }),
+  clearChatHistory: (chatId: string) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/messages`, {
+      method: "DELETE",
     }),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
   createPersona: (payload: CreatePersonaPayload) =>
@@ -968,9 +1003,19 @@ const QuickCreateMenu = () => {
 const ConversationList = ({
   chats,
   selectedChatId,
+  onTogglePin,
+  onToggleDnd,
+  onToggleUnread,
+  onClearHistory,
+  onDissolveChat,
 }: {
   chats: ChatSummary[];
   selectedChatId: string;
+  onTogglePin: (chat: ChatSummary) => void;
+  onToggleDnd: (chat: ChatSummary) => void;
+  onToggleUnread: (chat: ChatSummary) => void;
+  onClearHistory: (chat: ChatSummary) => void;
+  onDissolveChat: (chat: ChatSummary) => void;
 }) => (
   <aside className="conversation-pane">
     <div className="conversation-header">
@@ -984,21 +1029,65 @@ const ConversationList = ({
       dataSource={chats}
       renderItem={(chat) => {
         const isActive = chat.chat_id === selectedChatId;
+        const menuItems: MenuProps["items"] = [
+          { key: "pin", label: chat.pinned ? "取消置顶" : "置顶" },
+          { key: "dnd", label: chat.dnd ? "取消免打扰" : "免打扰" },
+          { key: "unread", label: chat.marked_unread ? "取消标为未读" : "标为未读" },
+          { type: "divider" },
+          { key: "clear", label: "清除聊天记录" },
+          { key: "dissolve", label: "解散群聊", danger: true },
+        ];
         return (
-          <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
-            <Link to={getChatPath(chat.chat_id)} className="conversation-link">
-              <div className="conversation-avatar">{chat.name.slice(0, 1)}</div>
-              <div className="conversation-copy">
-                <Flex justify="space-between" align="center" gap={12}>
-                  <Typography.Text strong>{chat.name}</Typography.Text>
-                  <Typography.Text type="secondary">{formatConversationTime(chat.last_message_at)}</Typography.Text>
-                </Flex>
-                <Typography.Text type="secondary" className="conversation-preview">
-                  {getChatPreview(chat)}
-                </Typography.Text>
-              </div>
-            </Link>
-          </List.Item>
+          <Dropdown
+            trigger={["contextMenu"]}
+            menu={{
+              items: menuItems,
+              onClick: ({ key, domEvent }) => {
+                domEvent.preventDefault();
+                domEvent.stopPropagation();
+                if (key === "pin") {
+                  onTogglePin(chat);
+                  return;
+                }
+                if (key === "dnd") {
+                  onToggleDnd(chat);
+                  return;
+                }
+                if (key === "unread") {
+                  onToggleUnread(chat);
+                  return;
+                }
+                if (key === "clear") {
+                  onClearHistory(chat);
+                  return;
+                }
+                if (key === "dissolve") {
+                  onDissolveChat(chat);
+                }
+              },
+            }}
+          >
+            <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
+              <Link to={getChatPath(chat.chat_id)} className="conversation-link">
+                <Badge dot={Boolean(chat.marked_unread)} offset={[-4, 36]}>
+                  <div className="conversation-avatar">{chat.name.slice(0, 1)}</div>
+                </Badge>
+                <div className="conversation-copy">
+                  <Flex justify="space-between" align="center" gap={12}>
+                    <Flex align="center" gap={8} className="conversation-title-row">
+                      {chat.pinned ? <span className="conversation-flag">置顶</span> : null}
+                      {chat.dnd ? <span className="conversation-flag quiet">免打扰</span> : null}
+                      <Typography.Text strong>{chat.name}</Typography.Text>
+                    </Flex>
+                    <Typography.Text type="secondary">{formatConversationTime(chat.last_message_at)}</Typography.Text>
+                  </Flex>
+                  <Typography.Text type="secondary" className="conversation-preview">
+                    {getChatPreview(chat)}
+                  </Typography.Text>
+                </div>
+              </Link>
+            </List.Item>
+          </Dropdown>
         );
       }}
     />
@@ -1262,6 +1351,15 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     setAddMembersOpen(false);
   }, [activeChatId]);
 
+  const syncChatSnapshot = (nextSnapshot: ChatSnapshot) => {
+    queryClient.setQueryData(["chat", nextSnapshot.chat_id], nextSnapshot);
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+      (previous ?? []).map((chat) =>
+        chat.chat_id === nextSnapshot.chat_id ? applyChatSummaryFromSnapshot(chat, nextSnapshot) : chat,
+      ),
+    );
+  };
+
   const sendMessage = async () => {
     const content = draft.trim();
     if (!content || sending || !activeChatId) {
@@ -1287,22 +1385,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     setMuting(true);
     try {
       const nextSnapshot = await api.toggleChatMute(activeChatId, nextMuted);
-      queryClient.setQueryData(["chat", activeChatId], nextSnapshot);
-      queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-        (previous ?? []).map((chat) =>
-          chat.chat_id === activeChatId
-            ? {
-                ...chat,
-                muted: nextMuted,
-                message_count: nextSnapshot.messages.length,
-                last_message_at:
-                  nextSnapshot.messages.length > 0
-                    ? nextSnapshot.messages[nextSnapshot.messages.length - 1]?.created_at
-                    : (chat.last_message_at ?? null),
-              }
-            : chat,
-        ),
-      );
+      syncChatSnapshot(nextSnapshot);
       message.success(nextMuted ? "已开启全体禁言" : "已关闭全体禁言");
     } catch (error) {
       setPendingMuted((current) => (current === nextMuted ? null : current));
@@ -1325,7 +1408,15 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   if (!activeChatId) {
     return (
       <div className="wechat-shell">
-        <ConversationList chats={chats} selectedChatId="" />
+        <ConversationList
+          chats={chats}
+          selectedChatId=""
+          onTogglePin={togglePinChat}
+          onToggleDnd={toggleDndChat}
+          onToggleUnread={toggleUnreadChat}
+          onClearHistory={clearConversationHistory}
+          onDissolveChat={dissolveConversation}
+        />
         <div className="chat-pane empty-pane">
           <div className="empty-state-panel">
             <Empty description="还没有聊天室" />
@@ -1338,7 +1429,15 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   if (!snapshot) {
     return (
       <div className="wechat-shell">
-        <ConversationList chats={chats} selectedChatId={activeChatId} />
+        <ConversationList
+          chats={chats}
+          selectedChatId={activeChatId}
+          onTogglePin={togglePinChat}
+          onToggleDnd={toggleDndChat}
+          onToggleUnread={toggleUnreadChat}
+          onClearHistory={clearConversationHistory}
+          onDissolveChat={dissolveConversation}
+        />
         <div className="chat-pane empty-pane">
           <div className="empty-state-panel">
           <Empty description="房间不存在" />
@@ -1384,44 +1483,14 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     const nextMuted = !Boolean(targetMember.muted);
     try {
       const nextSnapshot = await api.toggleChatMemberMute(activeChatId, persona.persona_id, nextMuted);
-      queryClient.setQueryData(["chat", activeChatId], nextSnapshot);
-      queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-        (previous ?? []).map((chat) =>
-          chat.chat_id === activeChatId
-            ? {
-                ...chat,
-                member_count: nextSnapshot.members.length,
-                message_count: nextSnapshot.messages.length,
-                last_message_at:
-                  nextSnapshot.messages.length > 0
-                    ? nextSnapshot.messages[nextSnapshot.messages.length - 1]?.created_at
-                    : (chat.last_message_at ?? null),
-              }
-            : chat,
-        ),
-      );
+      syncChatSnapshot(nextSnapshot);
       message.success(nextMuted ? `已禁言 ${persona.name}` : `已取消禁言 ${persona.name}`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "更新成员禁言状态失败");
     }
   };
   const handleMembersAdded = (payload: AddChatMembersResponse) => {
-    queryClient.setQueryData(["chat", payload.chat.chat_id], payload.chat);
-    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-      (previous ?? []).map((chat) =>
-        chat.chat_id === payload.chat.chat_id
-          ? {
-              ...chat,
-              member_count: payload.chat.members.length,
-              message_count: payload.chat.messages.length,
-              last_message_at:
-                payload.chat.messages.length > 0
-                  ? payload.chat.messages[payload.chat.messages.length - 1]?.created_at
-                  : (chat.last_message_at ?? null),
-            }
-          : chat,
-      ),
-    );
+    syncChatSnapshot(payload.chat);
     setAddMembersOpen(false);
     if (payload.added_persona_ids.length > 0) {
       message.success(`已添加 ${payload.added_persona_ids.length} 个成员`);
@@ -1459,22 +1528,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
         if (!payload.chat) {
           return;
         }
-        queryClient.setQueryData(["chat", payload.chat.chat_id], payload.chat);
-        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-          (previous ?? []).map((chat) =>
-            chat.chat_id === payload.chat?.chat_id
-              ? {
-                  ...chat,
-                  member_count: payload.chat.members.length,
-                  message_count: payload.chat.messages.length,
-                  last_message_at:
-                    payload.chat.messages.length > 0
-                      ? payload.chat.messages[payload.chat.messages.length - 1]?.created_at
-                      : (chat.last_message_at ?? null),
-                }
-              : chat,
-          ),
-        );
+        syncChatSnapshot(payload.chat);
         message.success(`已移出 ${persona.name}`);
       },
     });
@@ -1497,10 +1551,81 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
       },
     });
   };
+  async function updateConversationPreference(
+    chat: ChatSummary,
+    payload: { pinned?: boolean; dnd?: boolean; markedUnread?: boolean },
+    successText: string,
+  ) {
+    try {
+      const nextSnapshot = await api.updateChatPreferences(chat.chat_id, payload);
+      syncChatSnapshot(nextSnapshot);
+      message.success(successText);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新会话状态失败");
+    }
+  }
+  function togglePinChat(chat: ChatSummary) {
+    void updateConversationPreference(chat, { pinned: !chat.pinned }, chat.pinned ? "已取消置顶" : "已置顶");
+  }
+  function toggleDndChat(chat: ChatSummary) {
+    void updateConversationPreference(chat, { dnd: !chat.dnd }, chat.dnd ? "已关闭免打扰" : "已开启免打扰");
+  }
+  function toggleUnreadChat(chat: ChatSummary) {
+    void updateConversationPreference(
+      chat,
+      { markedUnread: !chat.marked_unread },
+      chat.marked_unread ? "已取消标为未读" : "已标为未读",
+    );
+  }
+  function clearConversationHistory(chat: ChatSummary) {
+    Modal.confirm({
+      title: "清除聊天记录",
+      content: `确认清除 ${chat.name} 的聊天记录吗？清除后无法恢复。`,
+      okText: "清除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        const nextSnapshot = await api.clearChatHistory(chat.chat_id);
+        syncChatSnapshot(nextSnapshot);
+        message.success("已清除聊天记录");
+      },
+    });
+  }
+  function dissolveConversation(chat: ChatSummary) {
+    Modal.confirm({
+      title: "解散群聊",
+      content: `确认解散 ${chat.name} 吗？解散后将无法恢复。`,
+      okText: "解散",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        await api.deleteChat(chat.chat_id);
+        if (chat.chat_id === activeChatId) {
+          applyDissolvedChat(chat.chat_id);
+        } else {
+          queryClient.setQueryData(
+            ["chats"],
+            (previous: ChatSummary[] | undefined) => (previous ?? []).filter((item) => item.chat_id !== chat.chat_id),
+          );
+        }
+        message.success("群聊已解散");
+      },
+    });
+  }
 
   return (
     <div className={`wechat-shell ${detailOpen ? "detail-open" : ""}`}>
-      <ConversationList chats={chats} selectedChatId={activeChatId} />
+      <ConversationList
+        chats={chats}
+        selectedChatId={activeChatId}
+        onTogglePin={togglePinChat}
+        onToggleDnd={toggleDndChat}
+        onToggleUnread={toggleUnreadChat}
+        onClearHistory={clearConversationHistory}
+        onDissolveChat={dissolveConversation}
+      />
 
       <div className="chat-stage">
         <section className="chat-pane">

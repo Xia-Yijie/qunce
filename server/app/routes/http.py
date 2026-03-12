@@ -166,6 +166,36 @@ def delete_chat(chat_id: str) -> Any:
     return jsonify({"ok": True, "dissolved": True, "chat_id": chat_id, "member_count": len(snapshot.get("members", []))}), 200
 
 
+@app.post("/api/chats/<chat_id>/preferences")
+def update_chat_preferences(chat_id: str) -> Any:
+    payload = request.get_json(silent=True) or {}
+    next_payload = {
+        key: bool(payload[key])
+        for key in ("pinned", "dnd", "marked_unread")
+        if key in payload
+    }
+    if not next_payload:
+        abort(400, "preferences_required")
+
+    chat = state.update_chat(chat_id, next_payload)
+    if chat is None:
+        abort(404, "chat_not_found")
+    snapshot = state.chat_snapshot(chat_id)
+    if snapshot is None:
+        abort(404, "chat_not_found")
+    broadcast_chat_snapshot(chat_id)
+    return jsonify(chat_snapshot_payload(snapshot)), 200
+
+
+@app.delete("/api/chats/<chat_id>/messages")
+def clear_chat_history(chat_id: str) -> Any:
+    snapshot = state.clear_chat_history(chat_id)
+    if snapshot is None:
+        abort(404, "chat_not_found")
+    broadcast_chat_snapshot(chat_id)
+    return jsonify(chat_snapshot_payload(snapshot)), 200
+
+
 @app.post("/api/chats/<chat_id>/messages")
 def create_chat_message(chat_id: str) -> Any:
     payload = request.get_json(silent=True) or {}

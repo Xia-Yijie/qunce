@@ -231,6 +231,25 @@ a {
   padding: 14px 12px;
 }
 
+.conversation-title-row {
+  min-width: 0;
+}
+
+.conversation-flag {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #ffe7ba;
+  color: #9a5b00;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.conversation-flag.quiet {
+  background: #e9edf3;
+  color: #5b6472;
+}
+
 .conversation-avatar,
 .message-avatar {
   flex: 0 0 auto;

@@ -23,307 +23,38 @@ import type { MenuProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-
-type ChatSummary = {
-  chat_id: string;
-  name: string;
-  mode: string;
-  muted?: boolean;
-  pinned?: boolean;
-  dnd?: boolean;
-  marked_unread?: boolean;
-  unread_count?: number;
-  member_count: number;
-  message_count: number;
-  last_message_at?: string | null;
-  last_message_preview?: string | null;
-};
-
-type NodeSummary = {
-  node_id: string;
-  name: string;
-  hostname: string;
-  display_symbol: string;
-  remark: string;
-  status: string;
-  status_label: string;
-  approved: boolean;
-  can_accept: boolean;
-  hello_message: string;
-  work_dir?: string;
-  platform?: string;
-  arch?: string;
-  last_seen_at?: string;
-  running_turns?: number;
-  worker_count?: number;
-};
-
-type PersonaSummary = {
-  persona_id: string;
-  name: string;
-  status: string;
-  node_id: string;
-  node_name: string;
-  workspace_dir: string;
-  system_prompt: string;
-  agent_key: string;
-  agent_label: string;
-  model_provider: string;
-  avatar_symbol?: string;
-  avatar_bg_color?: string;
-  avatar_text_color?: string;
-};
-
-type CreatePersonaPayload = {
-  name: string;
-  node_id: string;
-  workspace_dir: string;
-  system_prompt: string;
-  agent_key: string;
-  agent_label: string;
-  avatar_symbol: string;
-  avatar_bg_color: string;
-  avatar_text_color: string;
-};
-
-type WorkspaceValidation = {
-  ok: boolean;
-  normalized_path: string;
-  message: string;
-};
-
-type ChatMember = {
-  persona_id: string;
-  name: string;
-  status: string;
-  muted?: boolean;
-};
-
-type ChatSnapshot = {
-  chat_id: string;
-  name: string;
-  mode: string;
-  muted?: boolean;
-  pinned?: boolean;
-  dnd?: boolean;
-  marked_unread?: boolean;
-  unread_count?: number;
-  members: ChatMember[];
-  messages: Array<{
-    message_id: string;
-    sender_type: string;
-    sender_name: string;
-    content: string;
-    status: string;
-    created_at: string;
-    metadata?: {
-      persona_id?: string;
-      node_id?: string;
-      turn_id?: string;
-    };
-    read_receipt?: {
-      read_count: number;
-      unread_count: number;
-      total_count: number;
-      read_by: ChatMember[];
-      unread_by: ChatMember[];
-    };
-  }>;
-};
-
-type AddChatMembersResponse = {
-  chat: ChatSnapshot;
-  added_persona_ids: string[];
-};
-
-type RemoveChatMemberResponse = {
-  ok: boolean;
-  dissolved: boolean;
-  removed_persona_id: string;
-  removed_persona_name: string;
-  chat?: ChatSnapshot;
-};
-
-type DeleteChatResponse = {
-  ok: boolean;
-  dissolved: boolean;
-  chat_id: string;
-  member_count: number;
-};
-
-const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const text = await response.text();
-    if (text) {
-      let message: string | null = null;
-      try {
-        const payload = JSON.parse(text) as { message?: string };
-        message = payload.message ?? null;
-      } catch {
-        message = null;
-      }
-      throw new Error(message || text);
-    }
-    throw new Error(`request failed: ${url}`);
-  }
-  return response.json() as Promise<T>;
-};
-
-const agentOptions = [
-  { key: "codex", label: "codex" },
-];
-
-const DEFAULT_PERSONA_AVATAR_BG = "#d9e6f8";
-const DEFAULT_PERSONA_AVATAR_TEXT = "#31547e";
-
-const getPersonaAvatarConfig = (persona: Pick<PersonaSummary, "name" | "avatar_symbol" | "avatar_bg_color" | "avatar_text_color">) => ({
-  symbol: (persona.avatar_symbol || persona.name || "?").trim().slice(0, 1) || "?",
-  backgroundColor: persona.avatar_bg_color || DEFAULT_PERSONA_AVATAR_BG,
-  color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
-});
-
-const renderMutedName = (name: string, muted?: boolean) => (
-  <span className="muted-name">
-    {muted ? <span className="muted-name-badge">禁言</span> : null}
-    <span className="muted-name-text">{name}</span>
-  </span>
-);
-
-const sortChats = (chats: ChatSummary[]) =>
-  [...chats].sort((left, right) => {
-    if (Boolean(left.pinned) !== Boolean(right.pinned)) {
-      return left.pinned ? -1 : 1;
-    }
-    const rightTime = right.last_message_at ?? "";
-    const leftTime = left.last_message_at ?? "";
-    if (rightTime !== leftTime) {
-      return rightTime.localeCompare(leftTime);
-    }
-    return right.chat_id.localeCompare(left.chat_id);
-  });
-
-const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSnapshot): ChatSummary => ({
-  ...chat,
-  name: snapshot.name,
-  muted: snapshot.muted,
-  pinned: snapshot.pinned,
-  dnd: snapshot.dnd,
-  marked_unread: snapshot.marked_unread,
-  unread_count: snapshot.unread_count ?? 0,
-  member_count: snapshot.members.length,
-  message_count: snapshot.messages.length,
-  last_message_at:
-    snapshot.messages.length > 0
-      ? snapshot.messages[snapshot.messages.length - 1]?.created_at
-      : null,
-  last_message_preview:
-    snapshot.messages.length > 0
-      ? snapshot.messages[snapshot.messages.length - 1]?.content ?? null
-      : null,
-});
-
-const api = {
-  chats: () => fetchJson<ChatSummary[]>("/api/chats"),
-  createChat: (payload: { personaIds: string[]; name?: string }) =>
-    fetchJson<ChatSummary>("/api/chats", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        persona_ids: payload.personaIds,
-        name: payload.name,
-      }),
-    }),
-  nodes: () => fetchJson<NodeSummary[]>("/api/nodes"),
-  acceptNode: (nodeId: string, payload: { display_symbol: string; remark: string }) =>
-    fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
-  rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
-  chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
-  addChatMembers: (chatId: string, payload: { personaIds: string[]; actorName?: string }) =>
-    fetchJson<AddChatMembersResponse>(`/api/chats/${chatId}/members`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        persona_ids: payload.personaIds,
-        actor_name: payload.actorName,
-      }),
-    }),
-  removeChatMember: (chatId: string, personaId: string, payload?: { actorName?: string }) =>
-    fetchJson<RemoveChatMemberResponse>(`/api/chats/${chatId}/members/${personaId}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor_name: payload?.actorName }),
-    }),
-  deleteChat: (chatId: string) =>
-    fetchJson<DeleteChatResponse>(`/api/chats/${chatId}`, {
-      method: "DELETE",
-    }),
-  toggleChatMute: (chatId: string, muted: boolean) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/mute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ muted, actor_name: "群状态" }),
-    }),
-  toggleChatMemberMute: (chatId: string, personaId: string, muted: boolean) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/members/${personaId}/mute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ muted, actor_name: "群成员" }),
-    }),
-  updateChatPreferences: (chatId: string, payload: { pinned?: boolean; dnd?: boolean; markedUnread?: boolean }) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/preferences`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...(payload.pinned === undefined ? {} : { pinned: payload.pinned }),
-        ...(payload.dnd === undefined ? {} : { dnd: payload.dnd }),
-        ...(payload.markedUnread === undefined ? {} : { marked_unread: payload.markedUnread }),
-      }),
-    }),
-  clearChatHistory: (chatId: string) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/messages`, {
-      method: "DELETE",
-    }),
-  markChatRead: (chatId: string) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/read`, {
-      method: "POST",
-    }),
-  updateChatName: (chatId: string, name: string) =>
-    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/name`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    }),
-  personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
-  createPersona: (payload: CreatePersonaPayload) =>
-    fetchJson<PersonaSummary>("/api/personas", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
-  deletePersona: (personaId: string) =>
-    fetchJson<{ ok: boolean }>("/api/personas", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ _action: "delete", persona_id: personaId }),
-    }),
-  validateWorkspace: (nodeId: string, workspaceDir: string) =>
-    fetchJson<WorkspaceValidation>(`/api/nodes/${nodeId}/workspace-check`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace_dir: workspaceDir }),
-    }),
-  sendMessage: (chatId: string, content: string) =>
-    fetchJson<{ ok: boolean }>(`/api/chats/${chatId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, sender_name: "你" }),
-    }),
-};
+import { api } from "./api";
+import {
+  DEFAULT_PERSONA_AVATAR_BG,
+  DEFAULT_PERSONA_AVATAR_TEXT,
+  agentOptions,
+  applyChatSummaryFromSnapshot,
+  formatConversationTime,
+  formatMessageTime,
+  formatReadableTime,
+  getChatPath,
+  getChatPreview,
+  getNodeDisplayName,
+  getNodeName,
+  getPendingNodeCount,
+  getPersonaAvatarConfig,
+  joinWorkspacePath,
+  renderMutedName,
+  sortChats,
+} from "./chat-utils";
+import { ConversationList, QuickCreateMenu } from "./conversation-list";
+import { SearchInputDropdown } from "./search-input-dropdown";
+import type {
+  AddChatMembersResponse,
+  ChatMember,
+  ChatSnapshot,
+  ChatSummary,
+  CreatePersonaPayload,
+  NodeSummary,
+  PersonaSummary,
+  WorkspaceValidation,
+} from "./types";
+import { useConsoleSocket } from "./use-console-socket";
 
 const ChatRailIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true" className="rail-icon">
@@ -358,28 +89,6 @@ const AgentRailIcon = () => (
       strokeWidth="1.8"
       strokeLinecap="round"
     />
-  </svg>
-);
-
-const StartChatMenuIcon = () => (
-  <svg viewBox="0 0 20 20" aria-hidden="true" className="quick-create-menu-icon">
-    <path
-      d="M4 5.5C4 4.67 4.67 4 5.5 4H14.5C15.33 4 16 4.67 16 5.5V10.5C16 11.33 15.33 12 14.5 12H9L6 15V12H5.5C4.67 12 4 11.33 4 10.5V5.5Z"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-const AddFriendMenuIcon = () => (
-  <svg viewBox="0 0 20 20" aria-hidden="true" className="quick-create-menu-icon">
-    <circle cx="8" cy="7" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-    <path d="M3.8 15C4.2 12.9 5.9 11.5 8 11.5C10.1 11.5 11.8 12.9 12.2 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    <path d="M15 6V10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    <path d="M13 8H17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 );
 
@@ -437,10 +146,6 @@ const railItems = [
 ];
 
 const settingsRailItem = { key: "/settings/runtime", icon: <SettingsRailIcon />, description: "设置" };
-
-const getPendingNodeCount = (nodes: NodeSummary[]) => nodes.filter((node) => node.can_accept).length;
-
-const getChatPath = (chatId: string) => `/chats/${chatId}`;
 
 const StartChatDialog = ({
   open,
@@ -716,160 +421,6 @@ const AddMembersDialog = ({
     </Modal>
   );
 };
-const useConsoleSocket = (chatIds: string[]) => {
-  const queryClient = useQueryClient();
-  const [connected, setConnected] = useState(false);
-  const [lastNotice, setLastNotice] = useState("等待连接群聊通道");
-
-  useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws/console`);
-
-    socket.addEventListener("open", () => {
-      setConnected(true);
-      setLastNotice("群聊通道已连接");
-      socket.send(
-        JSON.stringify({
-          v: 1,
-          type: "console.subscribe",
-          event_id: `evt_${crypto.randomUUID()}`,
-          request_id: `req_${crypto.randomUUID()}`,
-          ts: new Date().toISOString(),
-          source: { kind: "console", id: "browser" },
-          target: { kind: "server", id: "main" },
-          data: { chat_ids: chatIds, watch_nodes: true },
-        }),
-      );
-    });
-
-    socket.addEventListener("message", (event) => {
-      const payload = JSON.parse(event.data) as { type: string; data?: unknown };
-      if (payload.type === "server.notice") {
-        const data = (payload.data ?? {}) as Record<string, unknown>;
-        setLastNotice(String(data.message ?? "收到服务器通知"));
-      }
-      if (payload.type === "server.node.updated") {
-        setLastNotice("节点状态已同步");
-        const data = (payload.data ?? {}) as { nodes?: NodeSummary[] };
-        queryClient.setQueryData(["nodes"], data.nodes ?? []);
-      }
-      if (payload.type === "server.chat.snapshot") {
-        const data = payload.data as ChatSnapshot;
-        queryClient.setQueryData(["chat", data.chat_id], data);
-        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-          sortChats(
-            (previous ?? []).map((chat) =>
-              chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat,
-            ),
-          ),
-        );
-      }
-    });
-
-    socket.addEventListener("close", () => {
-      setConnected(false);
-      setLastNotice("群聊通道已断开");
-    });
-
-    socket.addEventListener("error", () => {
-      setConnected(false);
-      setLastNotice("群聊通道连接失败");
-    });
-
-    return () => socket.close();
-  }, [chatIds.join("|"), queryClient]);
-
-  return { connected, lastNotice };
-};
-
-const getChatPreview = (chat: ChatSummary) => {
-  if (chat.last_message_preview?.trim()) {
-    return chat.last_message_preview.trim();
-  }
-  return "还没有消息，等待第一轮讨论";
-};
-
-const formatMessageTime = (raw: string) => {
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-};
-
-const formatConversationTime = (raw?: string | null) => {
-  if (!raw) {
-    return "";
-  }
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const now = new Date();
-  const isSameDay =
-    now.getFullYear() === date.getFullYear() &&
-    now.getMonth() === date.getMonth() &&
-    now.getDate() === date.getDate();
-
-  if (isSameDay) {
-    return new Intl.DateTimeFormat("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date);
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-};
-
-const formatReadableTime = (raw?: string) => {
-  if (!raw) {
-    return "-";
-  }
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-};
-
-const getNodeName = (node: Pick<NodeSummary, "name" | "hostname">) => {
-  const hostname = node.hostname.trim();
-  if (hostname) {
-    return hostname;
-  }
-  const fallback = node.name.split("@").pop()?.trim();
-  return fallback || node.name;
-};
-
-const joinWorkspacePath = (baseDir: string, name: string) => {
-  const trimmedBase = baseDir.trim().replace(/[\\/]+$/, "");
-  const sanitizedName = name.trim().replace(/[<>:"/\\|?*]+/g, "_") || "friend";
-  if (!trimmedBase) {
-    return sanitizedName;
-  }
-  const separator = trimmedBase.includes("\\") ? "\\" : "/";
-  return `${trimmedBase}${separator}${sanitizedName}`;
-};
-
-const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "hostname">) => {
-  const remark = node.remark.trim();
-  if (remark) {
-    return remark;
-  }
-  return getNodeName(node);
-};
 
 const PersonaAvatar = ({
   persona,
@@ -981,158 +532,6 @@ const getMessageTone = (senderType: string) => {
   return "agent";
 };
 
-const QuickCreateMenu = () => {
-  const navigate = useNavigate();
-
-  return (
-    <Dropdown
-      overlayClassName="quick-create-dropdown"
-      trigger={["click"]}
-      menu={{
-        items: [
-          {
-            key: "start-chat",
-            label: (
-              <span className="quick-create-menu-label">
-                <StartChatMenuIcon />
-                <span>发起群聊</span>
-              </span>
-            ),
-          },
-          {
-            key: "add-friend",
-            label: (
-              <span className="quick-create-menu-label">
-                <AddFriendMenuIcon />
-                <span>添加伙伴</span>
-              </span>
-            ),
-          },
-        ],
-        onClick: ({ key, domEvent }) => {
-          domEvent.stopPropagation();
-          if (key === "start-chat") {
-            navigate("/chats?create=chat");
-            return;
-          }
-          if (key === "add-friend") {
-            navigate("/friends?create=friend");
-          }
-        },
-      }}
-    >
-      <button type="button" className="conversation-plus" aria-label="快捷操作">
-        +
-      </button>
-    </Dropdown>
-  );
-};
-
-const ConversationList = ({
-  chats,
-  selectedChatId,
-  onTogglePin,
-  onToggleDnd,
-  onToggleUnread,
-  onClearHistory,
-  onDissolveChat,
-}: {
-  chats: ChatSummary[];
-  selectedChatId: string;
-  onTogglePin: (chat: ChatSummary) => void;
-  onToggleDnd: (chat: ChatSummary) => void;
-  onToggleUnread: (chat: ChatSummary) => void;
-  onClearHistory: (chat: ChatSummary) => void;
-  onDissolveChat: (chat: ChatSummary) => void;
-}) => (
-  <aside className="conversation-pane">
-    <div className="conversation-header">
-      <div className="conversation-search-row">
-        <div className="conversation-search">搜索</div>
-        <QuickCreateMenu />
-      </div>
-    </div>
-    <List
-      className="conversation-list"
-      dataSource={chats}
-      renderItem={(chat) => {
-        const isActive = chat.chat_id === selectedChatId;
-        const menuItems: MenuProps["items"] = [
-          { key: "pin", label: chat.pinned ? "取消置顶" : "置顶" },
-          { key: "dnd", label: chat.dnd ? "取消免打扰" : "免打扰" },
-          { key: "unread", label: chat.marked_unread ? "取消标为未读" : "标为未读" },
-          { type: "divider" },
-          { key: "clear", label: "清除聊天记录" },
-          { key: "dissolve", label: "解散群聊", danger: true },
-        ];
-        return (
-          <Dropdown
-            trigger={["contextMenu"]}
-            menu={{
-              items: menuItems,
-              onClick: ({ key, domEvent }) => {
-                domEvent.preventDefault();
-                domEvent.stopPropagation();
-                if (key === "pin") {
-                  onTogglePin(chat);
-                  return;
-                }
-                if (key === "dnd") {
-                  onToggleDnd(chat);
-                  return;
-                }
-                if (key === "unread") {
-                  onToggleUnread(chat);
-                  return;
-                }
-                if (key === "clear") {
-                  onClearHistory(chat);
-                  return;
-                }
-                if (key === "dissolve") {
-                  onDissolveChat(chat);
-                }
-              },
-            }}
-          >
-            <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
-              <Link to={getChatPath(chat.chat_id)} className="conversation-link">
-                <Badge
-                  count={
-                    chat.dnd
-                      ? 0
-                      : (chat.unread_count ?? 0) > 0
-                        ? chat.unread_count
-                        : chat.marked_unread
-                          ? 1
-                          : undefined
-                  }
-                  size="default"
-                  offset={[-2, 34]}
-                >
-                  <div className="conversation-avatar">{chat.name.slice(0, 1)}</div>
-                </Badge>
-                <div className="conversation-copy">
-                  <Flex justify="space-between" align="center" gap={12}>
-                    <Flex align="center" gap={8} className="conversation-title-row">
-                      {chat.pinned ? <span className="conversation-flag">置顶</span> : null}
-                      {chat.dnd ? <span className="conversation-flag quiet">免打扰</span> : null}
-                      <Typography.Text strong>{chat.name}</Typography.Text>
-                    </Flex>
-                    <Typography.Text type="secondary">{formatConversationTime(chat.last_message_at)}</Typography.Text>
-                  </Flex>
-                  <Typography.Text type="secondary" className="conversation-preview">
-                    {getChatPreview(chat)}
-                  </Typography.Text>
-                </div>
-              </Link>
-            </List.Item>
-          </Dropdown>
-        );
-      }}
-    />
-  </aside>
-);
 
 const DirectoryLayout = ({
   title,
@@ -1141,6 +540,12 @@ const DirectoryLayout = ({
   onSelect,
   renderRow,
   detail,
+  searchValue,
+  onSearchChange,
+  searchStorageKey,
+  searchTitle,
+  searchSubtitle,
+  searchResults,
 }: {
   title: string;
   sections: Array<{ key: string; title: string; defaultCollapsed?: boolean; items: Array<{ id: string }> }>;
@@ -1148,6 +553,12 @@ const DirectoryLayout = ({
   onSelect: (id: string) => void;
   renderRow: (id: string, active: boolean) => React.ReactNode;
   detail: React.ReactNode;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  searchStorageKey: string;
+  searchTitle: string;
+  searchSubtitle: string;
+  searchResults: Array<{ key: string; title: string; subtitle?: string; onSelect: () => void }>;
 }) => {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(sections.map((section) => [section.key, section.defaultCollapsed ?? false])),
@@ -1172,7 +583,18 @@ const DirectoryLayout = ({
       <aside className="directory-list-pane">
         <div className="directory-toolbar">
           <div className="conversation-search-row">
-            <div className="conversation-search">搜索</div>
+            <SearchInputDropdown
+              value={searchValue}
+              onChange={onSearchChange}
+              placeholder="搜索"
+              storageKey={searchStorageKey}
+              title={searchTitle}
+              subtitle={searchSubtitle}
+              emptyText="没有最近在搜内容"
+              resultEmptyText="没有匹配的结果"
+              results={searchResults}
+              className="conversation-search"
+            />
             <QuickCreateMenu />
           </div>
         </div>
@@ -2179,6 +1601,8 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   const [accepting, setAccepting] = useState(false);
   const [displaySymbolDraft, setDisplaySymbolDraft] = useState("");
   const [remarkDraft, setRemarkDraft] = useState("");
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const entries = useMemo<DirectoryEntry[]>(
     () => [
       ...personas.map((persona) => ({ ...persona, kind: "agent" as const, id: `agent:${persona.persona_id}` })),
@@ -2186,7 +1610,35 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     ],
     [nodes, personas],
   );
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const searchResults = useMemo(() => {
+    const query = searchKeyword.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+    const agentResults = personas
+      .filter((persona) => {
+        const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name} ${persona.workspace_dir}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .map((persona) => ({
+        key: `agent:${persona.persona_id}`,
+        title: persona.name,
+        subtitle: persona.system_prompt || persona.node_name || "智能体",
+        onSelect: () => setSelectedEntryId(`agent:${persona.persona_id}`),
+      }));
+    const nodeResults = nodes
+      .filter((node) => {
+        const haystack = `${getNodeDisplayName(node)} ${getNodeName(node)} ${node.hello_message} ${node.remark}`.toLowerCase();
+        return haystack.includes(query);
+      })
+      .map((node) => ({
+        key: `node:${node.node_id}`,
+        title: getNodeDisplayName(node),
+        subtitle: node.hello_message || getNodeName(node),
+        onSelect: () => setSelectedEntryId(`node:${node.node_id}`),
+      }));
+    return [...agentResults, ...nodeResults];
+  }, [nodes, personas, searchKeyword]);
   const selectedEntry = useMemo(() => {
     if (selectedEntryId) {
       return entries.find((entry) => entry.id === selectedEntryId) ?? null;
@@ -2329,6 +1781,12 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         sections={sections}
         selectedId={selectedEntry?.id ?? null}
         onSelect={setSelectedEntryId}
+        searchValue={searchKeyword}
+        onSearchChange={setSearchKeyword}
+        searchStorageKey={defaultKind === "agent" ? "qunce.search.friends" : "qunce.search.nodes"}
+        searchTitle={defaultKind === "agent" ? "搜索智能体与好友" : "搜索节点"}
+        searchSubtitle={defaultKind === "agent" ? "名称、设定、节点等" : "名称、备注、状态等"}
+        searchResults={searchResults}
         renderRow={(id) => {
           const entry = entries.find((item) => item.id === id);
           if (!entry) return null;
@@ -2555,27 +2013,26 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   );
 };
 
-const RuntimePage = () => (
-  <section className="panel-page">
-    <div className="panel-card">
-      <Typography.Title level={3}>运行设置</Typography.Title>
-      <List
-        dataSource={[
-          "默认模型供应商：codex",
-          "默认超时：30 秒",
-          "默认自由讨论轮数：3",
-          "默认每轮人数：2",
-        ]}
-        renderItem={(item) => <List.Item>{item}</List.Item>}
-      />
-    </div>
-  </section>
+const RuntimeSettingsContent = () => (
+  <div className="panel-card">
+    <Typography.Title level={3}>运行设置</Typography.Title>
+    <List
+      dataSource={[
+        "默认模型供应商：codex",
+        "默认超时：30 秒",
+        "默认自由讨论轮数：3",
+        "默认每轮人数：2",
+      ]}
+      renderItem={(item) => <List.Item>{item}</List.Item>}
+    />
+  </div>
 );
 
 const AppShell = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const queryClient = useQueryClient();
   const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
@@ -2649,12 +2106,14 @@ const AppShell = () => {
             })}
           </div>
           <div className="rail-footer">
-            <Link
-              to={settingsRailItem.key}
-              className={`rail-button ${selectedKey === settingsRailItem.key ? "active" : ""}`}
+            <button
+              type="button"
+              className={`rail-button ${settingsOpen ? "active" : ""}`}
+              aria-label="打开设置"
+              onClick={() => setSettingsOpen(true)}
             >
               <span className="rail-glyph">{settingsRailItem.icon}</span>
-            </Link>
+            </button>
           </div>
         </aside>
 
@@ -2666,9 +2125,19 @@ const AppShell = () => {
             <Route path="/chats/:chatId" element={<ChatPage {...consoleSocket} />} />
             <Route path="/settings/nodes" element={<AgentDirectoryPage defaultKind="node" />} />
             <Route path="/friends" element={<AgentDirectoryPage defaultKind="agent" />} />
-            <Route path="/settings/runtime" element={<RuntimePage />} />
           </Routes>
           <StartChatDialog open={openCreateChat} personas={personas} onClose={closeCreateChat} onCreated={handleCreatedChat} />
+          <Modal
+            open={settingsOpen}
+            onCancel={() => setSettingsOpen(false)}
+            footer={null}
+            centered
+            width={520}
+            title="设置"
+            destroyOnHidden
+          >
+            <RuntimeSettingsContent />
+          </Modal>
         </Layout.Content>
       </Layout>
     </AntApp>

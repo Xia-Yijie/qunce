@@ -1098,8 +1098,15 @@ const ConversationList = ({
             <List.Item className={`conversation-row ${isActive ? "active" : ""}`}>
               <Link to={getChatPath(chat.chat_id)} className="conversation-link">
                 <Badge
-                  count={chat.dnd ? 0 : (chat.unread_count ?? 0) > 0 ? chat.unread_count : undefined}
-                  dot={!chat.dnd && (chat.unread_count ?? 0) === 0 && Boolean(chat.marked_unread)}
+                  count={
+                    chat.dnd
+                      ? 0
+                      : (chat.unread_count ?? 0) > 0
+                        ? chat.unread_count
+                        : chat.marked_unread
+                          ? 1
+                          : undefined
+                  }
                   size="default"
                   offset={[-2, 34]}
                 >

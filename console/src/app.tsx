@@ -141,6 +141,91 @@ const railItems = [
   { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
 ];
 
+const filterPersonasByKeyword = (personas: PersonaSummary[], keyword: string) => {
+  const query = keyword.trim().toLowerCase();
+  if (!query) {
+    return personas;
+  }
+  return personas.filter((persona) => {
+    const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
+    return haystack.includes(query);
+  });
+};
+
+const toggleSelectedId = (selectedIds: string[], nextId: string) =>
+  selectedIds.includes(nextId) ? selectedIds.filter((item) => item !== nextId) : [...selectedIds, nextId];
+
+const PersonaSelectionList = ({
+  personas,
+  selectedIds,
+  onToggle,
+  emptyText,
+}: {
+  personas: PersonaSummary[];
+  selectedIds: string[];
+  onToggle: (personaId: string) => void;
+  emptyText: string;
+}) => {
+  if (personas.length === 0) {
+    return <div className="start-chat-empty">{emptyText}</div>;
+  }
+
+  return (
+    <>
+      {personas.map((persona) => {
+        const checked = selectedIds.includes(persona.persona_id);
+        return (
+          <button
+            key={persona.persona_id}
+            type="button"
+            className={`start-chat-persona ${checked ? "selected" : ""}`}
+            onClick={() => onToggle(persona.persona_id)}
+          >
+            <Checkbox checked={checked} />
+            <PersonaAvatar persona={persona} className="directory-avatar agent" />
+            <div className="directory-copy">
+              <Typography.Text strong>{persona.name}</Typography.Text>
+              <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
+            </div>
+          </button>
+        );
+      })}
+    </>
+  );
+};
+
+const SelectedPersonaTags = ({
+  personas,
+  selectedIds,
+  onToggle,
+  emptyText,
+}: {
+  personas: PersonaSummary[];
+  selectedIds: string[];
+  onToggle: (personaId: string) => void;
+  emptyText: string;
+}) => {
+  if (selectedIds.length === 0) {
+    return <div className="start-chat-empty">{emptyText}</div>;
+  }
+
+  return (
+    <div className="start-chat-selected-tags">
+      {selectedIds.map((personaId) => {
+        const persona = personas.find((item) => item.persona_id === personaId);
+        if (!persona) {
+          return null;
+        }
+        return (
+          <button key={personaId} type="button" className="start-chat-tag" onClick={() => onToggle(personaId)}>
+            {persona.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 const StartChatDialog = ({
   open,
   personas,
@@ -167,21 +252,10 @@ const StartChatDialog = ({
     }
   }, [open]);
 
-  const filteredPersonas = useMemo(() => {
-    const query = keyword.trim().toLowerCase();
-    if (!query) {
-      return personas;
-    }
-    return personas.filter((persona) => {
-      const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [keyword, personas]);
+  const filteredPersonas = useMemo(() => filterPersonasByKeyword(personas, keyword), [keyword, personas]);
 
   const togglePersona = (personaId: string) => {
-    setSelectedIds((current) =>
-      current.includes(personaId) ? current.filter((item) => item !== personaId) : [...current, personaId],
-    );
+    setSelectedIds((current) => toggleSelectedId(current, personaId));
   };
 
   const submit = async () => {
@@ -224,50 +298,23 @@ const StartChatDialog = ({
         />
         <div className="start-chat-dialog-body">
           <div className="start-chat-list">
-            {filteredPersonas.length === 0 ? (
-              <div className="start-chat-empty">暂无可选的智能体，请先创建角色后再发起聊天。</div>
-            ) : (
-              filteredPersonas.map((persona) => {
-                const checked = selectedIds.includes(persona.persona_id);
-                return (
-                  <button
-                    key={persona.persona_id}
-                    type="button"
-                    className={`start-chat-persona ${checked ? "selected" : ""}`}
-                    onClick={() => togglePersona(persona.persona_id)}
-                  >
-                    <Checkbox checked={checked} />
-                    <PersonaAvatar persona={persona} className="directory-avatar agent" />
-                    <div className="directory-copy">
-                      <Typography.Text strong>{persona.name}</Typography.Text>
-                      <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
-                    </div>
-                  </button>
-                );
-              })
-            )}
+            <PersonaSelectionList
+              personas={filteredPersonas}
+              selectedIds={selectedIds}
+              onToggle={togglePersona}
+              emptyText="暂无可选的智能体，请先创建角色后再发起聊天。"
+            />
           </div>
           <div className="start-chat-selection">
             <Typography.Title level={5} style={{ marginTop: 0 }}>
               已选择的智能体
             </Typography.Title>
-            {selectedIds.length === 0 ? (
-               <div className="start-chat-empty">请选择至少一个智能体加入会话，右侧会显示当前已选成员。</div>
-            ) : (
-              <div className="start-chat-selected-tags">
-                {selectedIds.map((personaId) => {
-                  const persona = personas.find((item) => item.persona_id === personaId);
-                  if (!persona) {
-                    return null;
-                  }
-                  return (
-                    <button key={personaId} type="button" className="start-chat-tag" onClick={() => togglePersona(personaId)}>
-                      {persona.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            <SelectedPersonaTags
+              personas={personas}
+              selectedIds={selectedIds}
+              onToggle={togglePersona}
+              emptyText="请选择至少一个智能体加入会话，右侧会显示当前已选成员。"
+            />
           </div>
         </div>
         <div className="start-chat-actions">
@@ -316,21 +363,13 @@ const AddMembersDialog = ({
     [existingPersonaIds, personas],
   );
 
-  const filteredPersonas = useMemo(() => {
-    const query = keyword.trim().toLowerCase();
-    if (!query) {
-      return availablePersonas;
-    }
-    return availablePersonas.filter((persona) => {
-      const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [availablePersonas, keyword]);
+  const filteredPersonas = useMemo(
+    () => filterPersonasByKeyword(availablePersonas, keyword),
+    [availablePersonas, keyword],
+  );
 
   const togglePersona = (personaId: string) => {
-    setSelectedIds((current) =>
-      current.includes(personaId) ? current.filter((item) => item !== personaId) : [...current, personaId],
-    );
+    setSelectedIds((current) => toggleSelectedId(current, personaId));
   };
 
   const submit = async () => {
@@ -357,50 +396,23 @@ const AddMembersDialog = ({
         <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索成员" className="start-chat-search" />
         <div className="start-chat-dialog-body">
           <div className="start-chat-list">
-            {filteredPersonas.length === 0 ? (
-              <div className="start-chat-empty">没有可添加的成员</div>
-            ) : (
-              filteredPersonas.map((persona) => {
-                const checked = selectedIds.includes(persona.persona_id);
-                return (
-                  <button
-                    key={persona.persona_id}
-                    type="button"
-                    className={`start-chat-persona ${checked ? "selected" : ""}`}
-                    onClick={() => togglePersona(persona.persona_id)}
-                  >
-                    <Checkbox checked={checked} />
-                    <PersonaAvatar persona={persona} className="directory-avatar agent" />
-                    <div className="directory-copy">
-                      <Typography.Text strong>{persona.name}</Typography.Text>
-                      <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
-                    </div>
-                  </button>
-                );
-              })
-            )}
+            <PersonaSelectionList
+              personas={filteredPersonas}
+              selectedIds={selectedIds}
+              onToggle={togglePersona}
+              emptyText="没有可添加的成员"
+            />
           </div>
           <div className="start-chat-selection">
             <Typography.Title level={5} style={{ marginTop: 0 }}>
               已选成员
             </Typography.Title>
-            {selectedIds.length === 0 ? (
-              <div className="start-chat-empty">选择要加入当前聊天的成员</div>
-            ) : (
-              <div className="start-chat-selected-tags">
-                {selectedIds.map((personaId) => {
-                  const persona = personas.find((item) => item.persona_id === personaId);
-                  if (!persona) {
-                    return null;
-                  }
-                  return (
-                    <button key={personaId} type="button" className="start-chat-tag" onClick={() => togglePersona(personaId)}>
-                      {persona.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            <SelectedPersonaTags
+              personas={personas}
+              selectedIds={selectedIds}
+              onToggle={togglePersona}
+              emptyText="选择要加入当前聊天的成员"
+            />
           </div>
         </div>
         <div className="start-chat-actions">

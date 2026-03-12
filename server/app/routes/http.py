@@ -5,6 +5,7 @@ from typing import Any
 from flask import abort, jsonify, request, send_from_directory
 
 from server.app.config import settings
+from server.app.routes._helpers import load_ordered_personas, parse_persona_ids
 from server.app.runtime import DIST_DIR, app
 from server.app.serializers import (
     chat_snapshot_payload,
@@ -45,21 +46,15 @@ def create_chat() -> Any:
     payload = request.get_json(silent=True) or {}
     raw_persona_ids = payload.get("persona_ids")
     name = str(payload.get("name", "")).strip()
-    persona_ids: list[str] = []
     if isinstance(raw_persona_ids, list):
-        persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
+        persona_ids = parse_persona_ids(raw_persona_ids, error_code="persona_id_required")
     else:
         persona_id = str(payload.get("persona_id", "")).strip()
-        if persona_id:
-            persona_ids = [persona_id]
-    if not persona_ids:
-        abort(400, "persona_id_required")
+        if not persona_id:
+            abort(400, "persona_id_required")
+        persona_ids = [persona_id]
 
-    personas = [persona for persona in state.list_personas() if str(persona.get("persona_id", "")) in set(persona_ids)]
-    if len(personas) != len(set(persona_ids)):
-        abort(404, "persona_not_found")
-
-    ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
+    ordered_personas = load_ordered_personas(persona_ids)
     chat = state.create_or_get_chat(ordered_personas, name=name)
     return jsonify(chat_summary_payload(chat)), 201
 
@@ -77,22 +72,13 @@ def add_chat_members(chat_id: str) -> Any:
     payload = request.get_json(silent=True) or {}
     raw_persona_ids = payload.get("persona_ids")
     actor_name = str(payload.get("actor_name", "群成员")).strip() or "群成员"
-    if not isinstance(raw_persona_ids, list):
-        abort(400, "persona_ids_required")
-
-    persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
-    if not persona_ids:
-        abort(400, "persona_ids_required")
+    persona_ids = parse_persona_ids(raw_persona_ids)
 
     chat = state.chat_snapshot(chat_id)
     if chat is None:
         abort(404, "chat_not_found")
 
-    personas = [persona for persona in state.list_personas() if str(persona.get("persona_id", "")) in set(persona_ids)]
-    if len(personas) != len(set(persona_ids)):
-        abort(404, "persona_not_found")
-
-    ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
+    ordered_personas = load_ordered_personas(persona_ids)
     result = state.add_members_to_chat(chat_id, ordered_personas)
     if result is None:
         abort(404, "chat_not_found")
@@ -100,7 +86,11 @@ def add_chat_members(chat_id: str) -> Any:
     snapshot = result["chat"]
     added_persona_ids = list(result.get("added_persona_ids", []))
     if added_persona_ids:
-        added_names = [str(persona.get("name", "")).strip() for persona in ordered_personas if str(persona.get("persona_id", "")) in set(added_persona_ids)]
+        added_names = [
+            str(persona.get("name", "")).strip()
+            for persona in ordered_personas
+            if str(persona.get("persona_id", "")) in set(added_persona_ids)
+        ]
         add_chat_message(
             chat_id,
             sender_type="event",
@@ -137,7 +127,14 @@ def remove_chat_member(chat_id: str, persona_id: str) -> Any:
     snapshot = result.get("chat")
     removed_name = str((removed_member or {}).get("name", "")).strip() or persona_id
     if dissolved:
-        return jsonify({"ok": True, "dissolved": True, "removed_persona_id": persona_id, "removed_persona_name": removed_name}), 200
+        return jsonify(
+            {
+                "ok": True,
+                "dissolved": True,
+                "removed_persona_id": persona_id,
+                "removed_persona_name": removed_name,
+            }
+        ), 200
 
     add_chat_message(
         chat_id,
@@ -300,17 +297,8 @@ def create_persona() -> Any:
     if action == "create_chat":
         raw_persona_ids = payload.get("persona_ids")
         name = str(payload.get("name", "")).strip()
-        persona_ids: list[str] = []
-        if isinstance(raw_persona_ids, list):
-            persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
-        if not persona_ids:
-            abort(400, "persona_id_required")
-
-        personas = [persona for persona in state.list_personas() if str(persona.get("persona_id", "")) in set(persona_ids)]
-        if len(personas) != len(set(persona_ids)):
-            abort(404, "persona_not_found")
-
-        ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
+        persona_ids = parse_persona_ids(raw_persona_ids, error_code="persona_id_required")
+        ordered_personas = load_ordered_personas(persona_ids)
         chat = state.create_or_get_chat(ordered_personas, name=name)
         return jsonify(chat_summary_payload(chat)), 201
 

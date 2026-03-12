@@ -124,8 +124,8 @@ export const ConversationList = ({
             storageKey="qunce.search.chats"
             title="搜索聊天结果"
             subtitle="聊天名称、消息内容等"
-            emptyText="没有最近在搜内容"
-            resultEmptyText="没有匹配的聊天结果"
+            emptyText="没有最近搜索内容"
+            resultEmptyText="没有匹配的聊天"
             results={chatResults.map((chat) => ({
               key: chat.chat_id,
               title: chat.name,

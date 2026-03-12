@@ -1,1 +1,1 @@
-"""Route modules for 群策 server."""
+"""Route modules for the Qunce server."""

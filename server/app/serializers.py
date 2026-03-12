@@ -113,7 +113,7 @@ def persona_summary_payload(persona: dict[str, Any]) -> dict[str, Any]:
 def node_summary_payload(node: dict[str, Any]) -> dict[str, Any]:
     status = str(node.get("status", "offline"))
     status_label = {
-        "pending": "待接受",
+        "pending": "待接收",
         "online": "在线",
         "offline": "离线",
     }.get(status, status)

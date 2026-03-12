@@ -19,6 +19,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import type { MenuProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -93,6 +94,11 @@ type ChatSnapshot = {
     content: string;
     status: string;
     created_at: string;
+    metadata?: {
+      persona_id?: string;
+      node_id?: string;
+      turn_id?: string;
+    };
     read_receipt?: {
       read_count: number;
       unread_count: number;
@@ -786,12 +792,18 @@ const MessageBubble = ({
   senderType,
   content,
   createdAt,
+  persona,
+  onMention,
+  onMuteAgent,
   readReceipt,
 }: {
   senderName: string;
   senderType: string;
   content: string;
   createdAt: string;
+  persona?: PersonaSummary | null;
+  onMention?: (persona: PersonaSummary) => void;
+  onMuteAgent?: (persona: PersonaSummary) => void;
   readReceipt?: {
     read_count: number;
     unread_count: number;
@@ -839,10 +851,72 @@ const MessageBubble = ({
       </div>
     </div>
   ) : null;
+  const avatar = <div className={`message-avatar ${tone}`}>{senderName.slice(0, 1)}</div>;
+  const agentInfoPanel =
+    senderType === "agent" && persona ? (
+      <div className="agent-card-popover">
+        <div className="agent-card-head">
+          <div className="agent-card-avatar">{persona.name.slice(0, 1)}</div>
+          <div className="agent-card-copy">
+            <Typography.Text strong>{persona.name}</Typography.Text>
+            <Typography.Text type="secondary">智能体 ID：{persona.persona_id}</Typography.Text>
+          </div>
+        </div>
+        <div className="agent-card-grid">
+          <div className="agent-card-row">
+            <span className="agent-card-label">状态</span>
+            <span>{persona.status}</span>
+          </div>
+          <div className="agent-card-row">
+            <span className="agent-card-label">运行节点</span>
+            <span>{persona.node_name || persona.node_id || "-"}</span>
+          </div>
+          <div className="agent-card-row">
+            <span className="agent-card-label">工作目录</span>
+            <span className="agent-card-value">{persona.workspace_dir || "-"}</span>
+          </div>
+          <div className="agent-card-row">
+            <span className="agent-card-label">角色设定</span>
+            <span className="agent-card-value">{persona.system_prompt || "-"}</span>
+          </div>
+        </div>
+      </div>
+    ) : null;
+  const agentAvatarMenu: MenuProps | undefined =
+    senderType === "agent" && persona
+      ? {
+          items: [
+            { key: "mention", label: `@ ${persona.name}` },
+            { key: "mute", label: "禁言" },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.preventDefault();
+            if (key === "mention") {
+              onMention?.(persona);
+              return;
+            }
+            if (key === "mute") {
+              onMuteAgent?.(persona);
+            }
+          },
+        }
+      : undefined;
 
   return (
     <div className={`message-row ${tone}`}>
-      <div className={`message-avatar ${tone}`}>{senderName.slice(0, 1)}</div>
+      {agentInfoPanel ? (
+        <Dropdown trigger={["contextMenu"]} menu={agentAvatarMenu ?? undefined}>
+          <span className="message-avatar-trigger">
+            <Popover placement="rightTop" content={agentInfoPanel} trigger="click" overlayClassName="agent-card-popover-wrap">
+              <button type="button" className="message-avatar-button" aria-label={`查看 ${senderName} 的智能体信息`}>
+                {avatar}
+              </button>
+            </Popover>
+          </span>
+        </Dropdown>
+      ) : (
+        avatar
+      )}
       <div className="message-body">
         <Flex align="center" gap={10}>
           <Typography.Text strong>{senderName}</Typography.Text>
@@ -860,7 +934,9 @@ const MessageBubble = ({
                   className="message-read-badge"
                   aria-label="查看已读状态"
                 >
-                  <span className="message-read-dot" />
+                  <span className="message-read-count">
+                    {readReceipt.read_count}/{readReceipt.total_count}
+                  </span>
                 </button>
               </Popover>
             </div>
@@ -884,6 +960,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
   const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
+  const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
   const { data: snapshot, isLoading } = useQuery({
     queryKey: ["chat", activeChatId],
     queryFn: () => api.chatSnapshot(activeChatId ?? ""),
@@ -1013,6 +1090,20 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
           { label: "参与成员", value: `${snapshot.members.length} 人` },
           { label: "会话备注", value: "暂无备注" },
         ];
+  const personasById = new Map(personas.map((persona) => [persona.persona_id, persona]));
+  const personasByName = new Map(personas.map((persona) => [persona.name, persona]));
+  const mentionPersona = (persona: PersonaSummary) => {
+    setDraft((current) => {
+      const prefix = current.trim().length === 0 ? "" : current.endsWith(" ") ? current : `${current} `;
+      return `${prefix}@${persona.name} `;
+    });
+    window.requestAnimationFrame(() => {
+      document.getElementById("chat-composer")?.focus();
+    });
+  };
+  const mutePersona = (persona: PersonaSummary) => {
+    message.info(`暂未支持单独禁言智能体 ${persona.name}`);
+  };
 
   return (
     <div className={`wechat-shell ${detailOpen ? "detail-open" : ""}`}>
@@ -1045,6 +1136,13 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
                 senderType={message.sender_type}
                 content={message.content}
                 createdAt={message.created_at}
+                persona={
+                  (message.metadata?.persona_id ? personasById.get(message.metadata.persona_id) : undefined) ??
+                  personasByName.get(message.sender_name) ??
+                  null
+                }
+                onMention={mentionPersona}
+                onMuteAgent={mutePersona}
                 readReceipt={message.read_receipt}
               />
             ))}
@@ -1068,6 +1166,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               ) : null}
             </div>
             <Input.TextArea
+              id="chat-composer"
               autoSize={{ minRows: 4, maxRows: 7 }}
               bordered={false}
               placeholder={muteLocked ? "当前群聊已开启全体禁言" : "输入消息，后续这里会接真实发送能力"}

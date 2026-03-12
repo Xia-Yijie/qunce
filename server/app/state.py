@@ -339,6 +339,8 @@ class SQLiteState:
             chat = self._get_payload("chats", "chat_id", chat_id)
             if chat is None:
                 return None
+            if sender_type == "user" and chat.get("mode") == "group" and bool(chat.get("muted", False)):
+                raise PermissionError("chat_muted")
 
             created_at = self._now()
             message = {

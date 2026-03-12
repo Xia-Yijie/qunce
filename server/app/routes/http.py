@@ -15,7 +15,7 @@ from server.app.serializers import (
 )
 from server.app.services.agents import agent_connections
 from server.app.services.events import add_chat_message, broadcast_chat_snapshot, broadcast_node_updates, update_node
-from server.app.services.turns import create_user_turn, set_chat_muted
+from server.app.services.turns import create_user_turn, set_chat_member_muted, set_chat_muted
 from server.app.state import state
 
 
@@ -44,6 +44,7 @@ def chats() -> Any:
 def create_chat() -> Any:
     payload = request.get_json(silent=True) or {}
     raw_persona_ids = payload.get("persona_ids")
+    name = str(payload.get("name", "")).strip()
     persona_ids: list[str] = []
     if isinstance(raw_persona_ids, list):
         persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
@@ -59,7 +60,7 @@ def create_chat() -> Any:
         abort(404, "persona_not_found")
 
     ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
-    chat = state.create_or_get_chat(ordered_personas)
+    chat = state.create_or_get_chat(ordered_personas, name=name)
     return jsonify(chat_summary_payload(chat)), 201
 
 
@@ -119,6 +120,52 @@ def add_chat_members(chat_id: str) -> Any:
     ), 200
 
 
+@app.delete("/api/chats/<chat_id>/members/<persona_id>")
+def remove_chat_member(chat_id: str, persona_id: str) -> Any:
+    payload = request.get_json(silent=True) or {}
+    actor_name = str(payload.get("actor_name", "群成员")).strip() or "群成员"
+
+    result = state.remove_member_from_chat(chat_id, persona_id)
+    if result is None:
+        abort(404, "chat_not_found")
+
+    removed_member = result.get("removed_member")
+    if not result.get("removed", False):
+        abort(404, "persona_not_in_chat")
+
+    dissolved = bool(result.get("dissolved", False))
+    snapshot = result.get("chat")
+    removed_name = str((removed_member or {}).get("name", "")).strip() or persona_id
+    if dissolved:
+        return jsonify({"ok": True, "dissolved": True, "removed_persona_id": persona_id, "removed_persona_name": removed_name}), 200
+
+    add_chat_message(
+        chat_id,
+        sender_type="event",
+        sender_name=actor_name,
+        content=f"已移出成员：{removed_name}",
+        metadata={"event_type": "chat.member.removed", "persona_id": persona_id},
+    )
+    latest_snapshot = state.chat_snapshot(chat_id) or snapshot
+    return jsonify(
+        {
+            "ok": True,
+            "dissolved": False,
+            "removed_persona_id": persona_id,
+            "removed_persona_name": removed_name,
+            "chat": chat_snapshot_payload(latest_snapshot),
+        }
+    ), 200
+
+
+@app.delete("/api/chats/<chat_id>")
+def delete_chat(chat_id: str) -> Any:
+    snapshot = state.delete_chat(chat_id)
+    if snapshot is None:
+        abort(404, "chat_not_found")
+    return jsonify({"ok": True, "dissolved": True, "chat_id": chat_id, "member_count": len(snapshot.get("members", []))}), 200
+
+
 @app.post("/api/chats/<chat_id>/messages")
 def create_chat_message(chat_id: str) -> Any:
     payload = request.get_json(silent=True) or {}
@@ -151,6 +198,27 @@ def toggle_chat_mute(chat_id: str) -> Any:
     return jsonify(chat_snapshot_payload(snapshot)), 200
 
 
+@app.post("/api/chats/<chat_id>/members/<persona_id>/mute")
+def toggle_chat_member_mute(chat_id: str, persona_id: str) -> Any:
+    payload = request.get_json(silent=True) or {}
+    muted = bool(payload.get("muted", False))
+    actor_name = str(payload.get("actor_name", "群成员")).strip() or "群成员"
+
+    try:
+        snapshot = set_chat_member_muted(
+            chat_id=chat_id,
+            persona_id=persona_id,
+            muted=muted,
+            actor_name=actor_name,
+        )
+    except ValueError:
+        abort(404, "chat_not_found")
+    except LookupError:
+        abort(404, "persona_not_in_chat")
+
+    return jsonify(chat_snapshot_payload(snapshot)), 200
+
+
 @app.get("/api/personas")
 def personas() -> Any:
     return jsonify([persona_summary_payload(persona) for persona in state.list_personas()])
@@ -172,6 +240,7 @@ def create_persona() -> Any:
 
     if action == "create_chat":
         raw_persona_ids = payload.get("persona_ids")
+        name = str(payload.get("name", "")).strip()
         persona_ids: list[str] = []
         if isinstance(raw_persona_ids, list):
             persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
@@ -183,7 +252,7 @@ def create_persona() -> Any:
             abort(404, "persona_not_found")
 
         ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
-        chat = state.create_or_get_chat(ordered_personas)
+        chat = state.create_or_get_chat(ordered_personas, name=name)
         return jsonify(chat_summary_payload(chat)), 201
 
     name = str(payload.get("name", "")).strip()

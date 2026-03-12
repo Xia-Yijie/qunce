@@ -35,6 +35,9 @@ def create_user_turn(*, chat_id: str, content: str, sender_name: str = "你") ->
     dispatched = 0
     for member in members:
         persona_id = str(member.get("persona_id", "")).strip()
+        if bool(member.get("muted", False)):
+            continue
+
         persona = personas_by_id.get(persona_id)
         if persona is None:
             continue
@@ -124,6 +127,27 @@ def set_chat_muted(*, chat_id: str, muted: bool, actor_name: str = "群状态") 
         sender_name=actor_name,
         content="已开启全体禁言" if muted else "已关闭全体禁言",
         metadata={"event_type": "chat.muted", "muted": muted},
+    )
+    if snapshot is None:
+        raise ValueError("chat_not_found")
+    return snapshot
+
+
+def set_chat_member_muted(*, chat_id: str, persona_id: str, muted: bool, actor_name: str = "群成员") -> dict[str, Any]:
+    result = state.set_member_muted(chat_id, persona_id, muted)
+    if result is None:
+        raise ValueError("chat_not_found")
+    if not result.get("updated", False):
+        raise LookupError("persona_not_in_chat")
+
+    member = result.get("member") or {}
+    member_name = str(member.get("name", "")).strip() or persona_id
+    snapshot = add_chat_message(
+        chat_id,
+        sender_type="event",
+        sender_name=actor_name,
+        content=f"{'已禁言' if muted else '已取消禁言'}成员：{member_name}",
+        metadata={"event_type": "chat.member.muted", "persona_id": persona_id, "muted": muted},
     )
     if snapshot is None:
         raise ValueError("chat_not_found")

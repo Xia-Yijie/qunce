@@ -363,6 +363,13 @@ a {
   cursor: pointer;
 }
 
+.chat-detail-avatar-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
 .chat-detail-avatar {
   width: 48px;
   height: 48px;
@@ -415,6 +422,12 @@ a {
   padding-top: 14px;
   display: flex;
   flex-direction: column;
+}
+
+.chat-detail-actions {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(31, 35, 41, 0.08);
 }
 
 .chat-detail-section {

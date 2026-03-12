@@ -87,12 +87,19 @@ type WorkspaceValidation = {
   message: string;
 };
 
+type ChatMember = {
+  persona_id: string;
+  name: string;
+  status: string;
+  muted?: boolean;
+};
+
 type ChatSnapshot = {
   chat_id: string;
   name: string;
   mode: string;
   muted?: boolean;
-  members: Array<{ persona_id: string; name: string; status: string }>;
+  members: ChatMember[];
   messages: Array<{
     message_id: string;
     sender_type: string;
@@ -109,8 +116,8 @@ type ChatSnapshot = {
       read_count: number;
       unread_count: number;
       total_count: number;
-      read_by: Array<{ persona_id: string; name: string; status: string }>;
-      unread_by: Array<{ persona_id: string; name: string; status: string }>;
+      read_by: ChatMember[];
+      unread_by: ChatMember[];
     };
   }>;
 };
@@ -118,6 +125,21 @@ type ChatSnapshot = {
 type AddChatMembersResponse = {
   chat: ChatSnapshot;
   added_persona_ids: string[];
+};
+
+type RemoveChatMemberResponse = {
+  ok: boolean;
+  dissolved: boolean;
+  removed_persona_id: string;
+  removed_persona_name: string;
+  chat?: ChatSnapshot;
+};
+
+type DeleteChatResponse = {
+  ok: boolean;
+  dissolved: boolean;
+  chat_id: string;
+  member_count: number;
 };
 
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
@@ -152,6 +174,8 @@ const getPersonaAvatarConfig = (persona: Pick<PersonaSummary, "name" | "avatar_s
   color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
 });
 
+const formatMutedName = (name: string, muted?: boolean) => (muted ? `[禁言]${name}` : name);
+
 const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
   createChat: (payload: { personaIds: string[]; name?: string }) =>
@@ -181,11 +205,27 @@ const api = {
         actor_name: payload.actorName,
       }),
     }),
+  removeChatMember: (chatId: string, personaId: string, payload?: { actorName?: string }) =>
+    fetchJson<RemoveChatMemberResponse>(`/api/chats/${chatId}/members/${personaId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor_name: payload?.actorName }),
+    }),
+  deleteChat: (chatId: string) =>
+    fetchJson<DeleteChatResponse>(`/api/chats/${chatId}`, {
+      method: "DELETE",
+    }),
   toggleChatMute: (chatId: string, muted: boolean) =>
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/mute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ muted, actor_name: "群状态" }),
+    }),
+  toggleChatMemberMute: (chatId: string, personaId: string, muted: boolean) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/members/${personaId}/mute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ muted, actor_name: "群成员" }),
     }),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
   createPersona: (payload: CreatePersonaPayload) =>
@@ -343,12 +383,14 @@ const StartChatDialog = ({
   onCreated: (chat: ChatSummary) => void;
 }) => {
   const { message } = AntApp.useApp();
+  const [chatName, setChatName] = useState("");
   const [keyword, setKeyword] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!open) {
+      setChatName("");
       setKeyword("");
       setSelectedIds([]);
       setCreating(false);
@@ -378,7 +420,7 @@ const StartChatDialog = ({
     }
     setCreating(true);
     try {
-      const chat = await api.createChat({ personaIds: selectedIds });
+      const chat = await api.createChat({ personaIds: selectedIds, name: chatName.trim() || undefined });
       onCreated(chat);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "发起聊天失败");
@@ -398,6 +440,12 @@ const StartChatDialog = ({
       destroyOnHidden
     >
       <div className="start-chat-dialog">
+        <Input
+          value={chatName}
+          onChange={(event) => setChatName(event.target.value)}
+          placeholder="群聊名称，不填则默认使用成员名"
+          maxLength={40}
+        />
         <Input
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
@@ -775,6 +823,88 @@ const PersonaAvatar = ({
   );
 };
 
+const PersonaInfoCard = ({ persona }: { persona: PersonaSummary }) => (
+  <div className="agent-card-popover">
+    <div className="agent-card-head">
+      <PersonaAvatar persona={persona} className="agent-card-avatar" />
+      <div className="agent-card-copy">
+        <Typography.Text strong>{persona.name}</Typography.Text>
+      </div>
+    </div>
+    <div className="agent-card-grid">
+      <div className="agent-card-row">
+        <span className="agent-card-label">运行节点</span>
+        <span>{persona.node_name || persona.node_id || "-"}</span>
+      </div>
+      <div className="agent-card-row">
+        <span className="agent-card-label">工作目录</span>
+        <span className="agent-card-value">{persona.workspace_dir || "-"}</span>
+      </div>
+      <div className="agent-card-row">
+        <span className="agent-card-label">角色设定</span>
+        <span className="agent-card-value">{persona.system_prompt || "-"}</span>
+      </div>
+    </div>
+  </div>
+);
+
+const PersonaInteractiveAvatar = ({
+  persona,
+  member,
+  avatarClassName,
+  buttonClassName,
+  popoverPlacement,
+  onMention,
+  onMute,
+  onKick,
+}: {
+  persona: PersonaSummary;
+  member?: ChatMember | null;
+  avatarClassName: string;
+  buttonClassName: string;
+  popoverPlacement: "rightTop" | "leftTop";
+  onMention?: (persona: PersonaSummary) => void;
+  onMute?: (persona: PersonaSummary, member?: ChatMember | null) => void;
+  onKick?: (persona: PersonaSummary) => void;
+}) => {
+  const menuItems: MenuProps["items"] = [
+    { key: "mention", label: `@ ${persona.name}` },
+    { key: "mute", label: member?.muted ? "取消禁言" : "禁言" },
+    { key: "kick", label: "踢出群聊", danger: true },
+  ];
+
+  return (
+    <Dropdown
+      trigger={["contextMenu"]}
+      menu={{
+        items: menuItems,
+        onClick: ({ key, domEvent }) => {
+          domEvent.preventDefault();
+          if (key === "mention") {
+            onMention?.(persona);
+            return;
+          }
+          if (key === "mute") {
+            onMute?.(persona, member);
+            return;
+          }
+          if (key === "kick") {
+            onKick?.(persona);
+          }
+        },
+      }}
+    >
+      <span className="message-avatar-trigger">
+        <Popover placement={popoverPlacement} content={<PersonaInfoCard persona={persona} />} trigger="click" overlayClassName="agent-card-popover-wrap">
+          <button type="button" className={buttonClassName} aria-label={`查看 ${persona.name} 的智能体信息`}>
+            <PersonaAvatar persona={persona} className={avatarClassName} />
+          </button>
+        </Popover>
+      </span>
+    </Dropdown>
+  );
+};
+
 const getMessageTone = (senderType: string) => {
   if (senderType === "event") {
     return "event";
@@ -979,8 +1109,10 @@ const MessageBubble = ({
   content,
   createdAt,
   persona,
+  member,
   onMention,
   onMuteAgent,
+  onKickAgent,
   readReceipt,
 }: {
   senderName: string;
@@ -988,17 +1120,20 @@ const MessageBubble = ({
   content: string;
   createdAt: string;
   persona?: PersonaSummary | null;
+  member?: ChatMember | null;
   onMention?: (persona: PersonaSummary) => void;
-  onMuteAgent?: (persona: PersonaSummary) => void;
+  onMuteAgent?: (persona: PersonaSummary, member?: ChatMember | null) => void;
+  onKickAgent?: (persona: PersonaSummary) => void;
   readReceipt?: {
     read_count: number;
     unread_count: number;
     total_count: number;
-    read_by: Array<{ persona_id: string; name: string; status: string }>;
-    unread_by: Array<{ persona_id: string; name: string; status: string }>;
+    read_by: ChatMember[];
+    unread_by: ChatMember[];
   };
 }) => {
   const tone = getMessageTone(senderType);
+  const displaySenderName = formatMutedName(senderName, member?.muted);
   if (tone === "event") {
     return (
       <div className="message-row event">
@@ -1016,7 +1151,7 @@ const MessageBubble = ({
         {readReceipt.read_by.length > 0 ? (
           readReceipt.read_by.map((member) => (
             <div key={`read-${member.persona_id}`} className="message-read-member">
-              {member.name}
+              {formatMutedName(member.name, member.muted)}
             </div>
           ))
         ) : (
@@ -1028,7 +1163,7 @@ const MessageBubble = ({
         {readReceipt.unread_by.length > 0 ? (
           readReceipt.unread_by.map((member) => (
             <div key={`unread-${member.persona_id}`} className="message-read-member">
-              {member.name}
+              {formatMutedName(member.name, member.muted)}
             </div>
           ))
         ) : (
@@ -1043,69 +1178,25 @@ const MessageBubble = ({
     ) : (
       <div className={`message-avatar ${tone}`}>{senderName.slice(0, 1)}</div>
     );
-  const agentInfoPanel =
-    senderType === "agent" && persona ? (
-      <div className="agent-card-popover">
-        <div className="agent-card-head">
-          <PersonaAvatar persona={persona} className="agent-card-avatar" />
-          <div className="agent-card-copy">
-            <Typography.Text strong>{persona.name}</Typography.Text>
-          </div>
-        </div>
-        <div className="agent-card-grid">
-          <div className="agent-card-row">
-            <span className="agent-card-label">运行节点</span>
-            <span>{persona.node_name || persona.node_id || "-"}</span>
-          </div>
-          <div className="agent-card-row">
-            <span className="agent-card-label">工作目录</span>
-            <span className="agent-card-value">{persona.workspace_dir || "-"}</span>
-          </div>
-          <div className="agent-card-row">
-            <span className="agent-card-label">角色设定</span>
-            <span className="agent-card-value">{persona.system_prompt || "-"}</span>
-          </div>
-        </div>
-      </div>
-    ) : null;
-  const agentAvatarMenu: MenuProps | undefined =
-    senderType === "agent" && persona
-      ? {
-          items: [
-            { key: "mention", label: `@ ${persona.name}` },
-            { key: "mute", label: "禁言" },
-          ],
-          onClick: ({ key, domEvent }) => {
-            domEvent.preventDefault();
-            if (key === "mention") {
-              onMention?.(persona);
-              return;
-            }
-            if (key === "mute") {
-              onMuteAgent?.(persona);
-            }
-          },
-        }
-      : undefined;
-
   return (
     <div className={`message-row ${tone}`}>
-      {agentInfoPanel ? (
-        <Dropdown trigger={["contextMenu"]} menu={agentAvatarMenu ?? undefined}>
-          <span className="message-avatar-trigger">
-            <Popover placement="rightTop" content={agentInfoPanel} trigger="click" overlayClassName="agent-card-popover-wrap">
-              <button type="button" className="message-avatar-button" aria-label={`查看 ${senderName} 的智能体信息`}>
-                {avatar}
-              </button>
-            </Popover>
-          </span>
-        </Dropdown>
+      {senderType === "agent" && persona ? (
+        <PersonaInteractiveAvatar
+          persona={persona}
+          member={member}
+          avatarClassName={`message-avatar ${tone}`}
+          buttonClassName="message-avatar-button"
+          popoverPlacement="rightTop"
+          onMention={onMention}
+          onMute={onMuteAgent}
+          onKick={onKickAgent}
+        />
       ) : (
         avatar
       )}
       <div className="message-body">
         <Flex align="center" gap={10}>
-          <Typography.Text strong>{senderName}</Typography.Text>
+          <Typography.Text strong>{displaySenderName}</Typography.Text>
           <Typography.Text type="secondary" className="message-time">
             {formatMessageTime(createdAt)}
           </Typography.Text>
@@ -1135,6 +1226,7 @@ const MessageBubble = ({
 
 const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: boolean; lastNotice: string; chatId?: string }) => {
   const { chatId } = useParams();
+  const navigate = useNavigate();
   const activeChatId = forcedChatId ?? chatId;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -1266,9 +1358,9 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const detailMetaItems = [
     { label: "聊天名称", value: snapshot.name },
     { label: "成员数量", value: `${snapshot.members.length} 人` },
-    { label: "聊天备注", value: "暂无备注" },
     { label: "全体禁言", value: effectiveMuted ? "已开启" : "未开启" },
   ];
+  const membersById = new Map(snapshot.members.map((member) => [member.persona_id, member]));
   const personasById = new Map(personas.map((persona) => [persona.persona_id, persona]));
   const personasByName = new Map(personas.map((persona) => [persona.name, persona]));
   const mentionPersona = (persona: PersonaSummary) => {
@@ -1280,8 +1372,38 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
       document.getElementById("chat-composer")?.focus();
     });
   };
-  const mutePersona = (persona: PersonaSummary) => {
-    message.info(`暂未支持单独禁言智能体 ${persona.name}`);
+  const mutePersona = async (persona: PersonaSummary, member?: ChatMember | null) => {
+    if (!activeChatId) {
+      return;
+    }
+    const targetMember = member ?? membersById.get(persona.persona_id);
+    if (!targetMember) {
+      message.error(`当前聊天中找不到成员 ${persona.name}`);
+      return;
+    }
+    const nextMuted = !Boolean(targetMember.muted);
+    try {
+      const nextSnapshot = await api.toggleChatMemberMute(activeChatId, persona.persona_id, nextMuted);
+      queryClient.setQueryData(["chat", activeChatId], nextSnapshot);
+      queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+        (previous ?? []).map((chat) =>
+          chat.chat_id === activeChatId
+            ? {
+                ...chat,
+                member_count: nextSnapshot.members.length,
+                message_count: nextSnapshot.messages.length,
+                last_message_at:
+                  nextSnapshot.messages.length > 0
+                    ? nextSnapshot.messages[nextSnapshot.messages.length - 1]?.created_at
+                    : (chat.last_message_at ?? null),
+              }
+            : chat,
+        ),
+      );
+      message.success(nextMuted ? `已禁言 ${persona.name}` : `已取消禁言 ${persona.name}`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新成员禁言状态失败");
+    }
   };
   const handleMembersAdded = (payload: AddChatMembersResponse) => {
     queryClient.setQueryData(["chat", payload.chat.chat_id], payload.chat);
@@ -1306,6 +1428,74 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     } else {
       message.info("所选成员已在当前聊天中");
     }
+  };
+  const applyDissolvedChat = (chatIdToRemove: string) => {
+    queryClient.removeQueries({ queryKey: ["chat", chatIdToRemove] });
+    queryClient.setQueryData(
+      ["chats"],
+      (previous: ChatSummary[] | undefined) => (previous ?? []).filter((chat) => chat.chat_id !== chatIdToRemove),
+    );
+    setAddMembersOpen(false);
+    navigate("/chats");
+  };
+  const kickPersona = async (persona: PersonaSummary) => {
+    if (!activeChatId) {
+      return;
+    }
+    Modal.confirm({
+      title: "踢出群聊",
+      content: `确认将 ${persona.name} 踢出当前聊天吗？`,
+      okText: "踢出",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        const payload = await api.removeChatMember(activeChatId, persona.persona_id, { actorName: "群成员" });
+        if (payload.dissolved) {
+          applyDissolvedChat(activeChatId);
+          message.success("最后一个成员已移出，群聊已解散");
+          return;
+        }
+        if (!payload.chat) {
+          return;
+        }
+        queryClient.setQueryData(["chat", payload.chat.chat_id], payload.chat);
+        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+          (previous ?? []).map((chat) =>
+            chat.chat_id === payload.chat?.chat_id
+              ? {
+                  ...chat,
+                  member_count: payload.chat.members.length,
+                  message_count: payload.chat.messages.length,
+                  last_message_at:
+                    payload.chat.messages.length > 0
+                      ? payload.chat.messages[payload.chat.messages.length - 1]?.created_at
+                      : (chat.last_message_at ?? null),
+                }
+              : chat,
+          ),
+        );
+        message.success(`已移出 ${persona.name}`);
+      },
+    });
+  };
+  const dissolveChat = async () => {
+    if (!activeChatId) {
+      return;
+    }
+    Modal.confirm({
+      title: "解散群聊",
+      content: "确认解散当前群聊吗？解散后将无法恢复。",
+      okText: "解散",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      centered: true,
+      onOk: async () => {
+        await api.deleteChat(activeChatId);
+        applyDissolvedChat(activeChatId);
+        message.success("群聊已解散");
+      },
+    });
   };
 
   return (
@@ -1344,8 +1534,10 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
                   personasByName.get(message.sender_name) ??
                   null
                 }
+                member={message.metadata?.persona_id ? membersById.get(message.metadata.persona_id) ?? null : null}
                 onMention={mentionPersona}
                 onMuteAgent={mutePersona}
+                onKickAgent={kickPersona}
                 readReceipt={message.read_receipt}
               />
             ))}
@@ -1401,8 +1593,21 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
             <div className="chat-detail-members">
               {filteredMembers.map((member) => (
                 <div key={member.persona_id} className="chat-detail-member">
-                  <div className="chat-detail-avatar">{member.name.slice(0, 1)}</div>
-                  <div className="chat-detail-name">{member.name}</div>
+                  {personasById.get(member.persona_id) ? (
+                    <PersonaInteractiveAvatar
+                      persona={personasById.get(member.persona_id)!}
+                      member={member}
+                      avatarClassName="chat-detail-avatar"
+                      buttonClassName="chat-detail-avatar-button"
+                      popoverPlacement="leftTop"
+                      onMention={mentionPersona}
+                      onMute={mutePersona}
+                      onKick={kickPersona}
+                    />
+                  ) : (
+                    <div className="chat-detail-avatar">{member.name.slice(0, 1)}</div>
+                  )}
+                  <div className="chat-detail-name">{formatMutedName(member.name, member.muted)}</div>
                 </div>
               ))}
               <button
@@ -1423,6 +1628,11 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
                   <div className="chat-detail-value">{item.value}</div>
                 </section>
               ))}
+            </div>
+            <div className="chat-detail-actions">
+              <Button danger block onClick={() => void dissolveChat()}>
+                解散群聊
+              </Button>
             </div>
           </aside>
         ) : null}

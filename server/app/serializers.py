@@ -34,6 +34,7 @@ def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
             "persona_id": str(member.get("persona_id", "")),
             "name": str(member.get("name", "")),
             "status": str(member.get("status", "active")),
+            "muted": bool(member.get("muted", False)),
         }
         for member in payload.get("members", [])
         if str(member.get("persona_id", "")).strip()
@@ -63,12 +64,13 @@ def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
                 for turn in message_turns
                 if str(turn.get("status", "")) in {"read", "running", "completed"}
             }
-            read_by = deepcopy([member for member in members if member["persona_id"] in read_persona_ids])
-            unread_by = deepcopy([member for member in members if member["persona_id"] not in read_persona_ids])
+            readable_members = [member for member in members if not member["muted"]]
+            read_by = deepcopy([member for member in readable_members if member["persona_id"] in read_persona_ids])
+            unread_by = deepcopy([member for member in readable_members if member["persona_id"] not in read_persona_ids])
             normalized["read_receipt"] = {
                 "read_count": len(read_by),
                 "unread_count": len(unread_by),
-                "total_count": len(members),
+                "total_count": len(readable_members),
                 "read_by": read_by,
                 "unread_by": unread_by,
             }

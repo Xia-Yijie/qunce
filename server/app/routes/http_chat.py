@@ -13,6 +13,7 @@ from server.app.state import state
 def start_chat() -> Any:
     payload = request.get_json(silent=True) or {}
     raw_persona_ids = payload.get("persona_ids")
+    name = str(payload.get("name", "")).strip()
     if not isinstance(raw_persona_ids, list):
         abort(400, "persona_id_required")
 
@@ -25,5 +26,5 @@ def start_chat() -> Any:
         abort(404, "persona_not_found")
 
     ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
-    chat = state.create_or_get_chat(ordered_personas)
+    chat = state.create_or_get_chat(ordered_personas, name=name)
     return jsonify(chat_summary_payload(chat)), 201

@@ -98,6 +98,18 @@ class StateStore:
                 if previous_mode != "group":
                     payload["mode"] = "group"
                     changed = True
+                if "remark" in payload:
+                    payload.pop("remark", None)
+                    changed = True
+                normalized_members = []
+                for member in members:
+                    normalized_member = dict(member)
+                    if "muted" not in normalized_member:
+                        normalized_member["muted"] = False
+                        changed = True
+                    normalized_members.append(normalized_member)
+                if normalized_members:
+                    payload["members"] = normalized_members
                 if not str(payload.get("name", "")).strip():
                     payload["name"] = next_name
                     changed = True
@@ -249,19 +261,22 @@ class StateStore:
             self._conn.execute("DELETE FROM personas WHERE persona_id = ?", (persona_id,))
             return deepcopy(persona)
 
-    def create_or_get_chat(self, personas: list[dict]) -> dict:
+    def delete_chat(self, chat_id: str) -> dict | None:
         with self._lock, self._conn:
-            persona_ids = sorted(str(persona["persona_id"]) for persona in personas)
-            for row in self._conn.execute(
-                "SELECT chat_id, payload FROM chats ORDER BY updated_at DESC, chat_id ASC"
-            ).fetchall():
-                chat = self._load(row["payload"])
-                members = list(chat.get("members", []))
-                member_ids = sorted(str(member.get("persona_id", "")) for member in members)
-                if member_ids == persona_ids:
-                    snapshot = self._chat_snapshot_locked(row["chat_id"])
-                    if snapshot is not None:
-                        return deepcopy(snapshot)
+            snapshot = self._chat_snapshot_locked(chat_id)
+            if snapshot is None:
+                return None
+            self._conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
+            self._conn.execute("DELETE FROM turns WHERE chat_id = ?", (chat_id,))
+            self._conn.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+            return deepcopy(snapshot)
+
+    def create_or_get_chat(self, personas: list[dict], *, name: str | None = None) -> dict:
+        with self._lock, self._conn:
+            requested_name = str(name or "").strip()
+            default_name = "、".join(
+                str(persona.get("name", "")).strip() for persona in personas[:3] if str(persona.get("name", "")).strip()
+            ) or "新聊天"
 
             now = self._now()
             chat = {
@@ -274,12 +289,14 @@ class StateStore:
                         "persona_id": persona["persona_id"],
                         "name": persona.get("name", ""),
                         "status": persona.get("status", "active"),
+                        "muted": False,
                     }
                     for persona in personas
                 ],
                 "created_at": now,
                 "updated_at": now,
             }
+            chat["name"] = requested_name or default_name
             self._conn.execute(
                 """
                 INSERT INTO chats(chat_id, payload, created_at, updated_at)
@@ -379,6 +396,7 @@ class StateStore:
                         "persona_id": persona_id,
                         "name": str(persona.get("name", "")).strip(),
                         "status": str(persona.get("status", "active")).strip() or "active",
+                        "muted": False,
                     }
                 )
                 existing_ids.add(persona_id)
@@ -401,6 +419,91 @@ class StateStore:
             if snapshot is None:
                 return None
             return {"chat": deepcopy(snapshot), "added_persona_ids": added_persona_ids}
+
+    def remove_member_from_chat(self, chat_id: str, persona_id: str) -> dict | None:
+        with self._lock, self._conn:
+            chat = self._get_payload("chats", "chat_id", chat_id)
+            if chat is None:
+                return None
+
+            members = [member for member in list(chat.get("members", [])) if isinstance(member, dict)]
+            removed_member = next(
+                (member for member in members if str(member.get("persona_id", "")).strip() == persona_id),
+                None,
+            )
+            if removed_member is None:
+                snapshot = self._chat_snapshot_locked(chat_id)
+                if snapshot is None:
+                    return None
+                return {"chat": deepcopy(snapshot), "removed": False, "dissolved": False}
+
+            remaining_members = [
+                member for member in members if str(member.get("persona_id", "")).strip() != persona_id
+            ]
+            if not remaining_members:
+                snapshot = self._chat_snapshot_locked(chat_id)
+                self._conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
+                self._conn.execute("DELETE FROM turns WHERE chat_id = ?", (chat_id,))
+                self._conn.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+                return {
+                    "chat": deepcopy(snapshot) if snapshot is not None else None,
+                    "removed": True,
+                    "removed_member": deepcopy(removed_member),
+                    "dissolved": True,
+                }
+
+            now = self._now()
+            chat["members"] = remaining_members
+            chat["updated_at"] = now
+            self._conn.execute(
+                "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
+                (self._dump(chat), now, chat_id),
+            )
+            snapshot = self._chat_snapshot_locked(chat_id)
+            if snapshot is None:
+                return None
+            return {
+                "chat": deepcopy(snapshot),
+                "removed": True,
+                "removed_member": deepcopy(removed_member),
+                "dissolved": False,
+            }
+
+    def set_member_muted(self, chat_id: str, persona_id: str, muted: bool) -> dict | None:
+        with self._lock, self._conn:
+            chat = self._get_payload("chats", "chat_id", chat_id)
+            if chat is None:
+                return None
+
+            members = [member for member in list(chat.get("members", [])) if isinstance(member, dict)]
+            target_member = None
+            updated_members: list[dict] = []
+            for member in members:
+                current_persona_id = str(member.get("persona_id", "")).strip()
+                if current_persona_id != persona_id:
+                    updated_members.append(member)
+                    continue
+
+                target_member = {**member, "muted": bool(muted)}
+                updated_members.append(target_member)
+
+            if target_member is None:
+                snapshot = self._chat_snapshot_locked(chat_id)
+                if snapshot is None:
+                    return None
+                return {"chat": deepcopy(snapshot), "updated": False, "member": None}
+
+            now = self._now()
+            chat["members"] = updated_members
+            chat["updated_at"] = now
+            self._conn.execute(
+                "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
+                (self._dump(chat), now, chat_id),
+            )
+            snapshot = self._chat_snapshot_locked(chat_id)
+            if snapshot is None:
+                return None
+            return {"chat": deepcopy(snapshot), "updated": True, "member": deepcopy(target_member)}
 
     def create_turn(
         self,

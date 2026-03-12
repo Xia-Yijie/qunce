@@ -137,6 +137,19 @@ a {
   background: #f5f5f5;
 }
 
+.chat-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.wechat-shell.detail-open .chat-stage {
+  grid-template-columns: minmax(0, 1fr) 304px;
+}
+
 .loading-shell,
 .empty-pane,
 .panel-page {
@@ -269,6 +282,31 @@ a {
   align-items: center;
 }
 
+.chat-more-button {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px !important;
+  color: #3b4047 !important;
+  background: rgba(31, 35, 41, 0.04) !important;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.chat-more-button:hover,
+.chat-more-button.active {
+  background: rgba(31, 35, 41, 0.1) !important;
+  color: #1f2329 !important;
+}
+
+.chat-more-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
 .message-stream {
   overflow: auto;
   padding: 20px 24px;
@@ -276,6 +314,99 @@ a {
   flex-direction: column;
   gap: 18px;
   min-height: 0;
+}
+
+.chat-detail-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #f7f7f7;
+  border-left: 1px solid rgba(31, 35, 41, 0.08);
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chat-detail-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, #f7f7f7 0%, #f7f7f7 85%, rgba(247, 247, 247, 0) 100%);
+  padding-bottom: 6px;
+}
+
+.chat-detail-search .ant-input-affix-wrapper,
+.chat-detail-search .ant-input {
+  border-radius: 8px;
+  background: #ededed;
+}
+
+.chat-detail-members {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px 10px;
+}
+
+.chat-detail-member {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-detail-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #dbe8f5 0%, #cfdff0 100%);
+  color: #31547e;
+  font-weight: 700;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-detail-name {
+  width: 100%;
+  text-align: center;
+  font-size: 13px;
+  color: #4d5258;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-detail-sections {
+  border-top: 1px solid rgba(31, 35, 41, 0.08);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-detail-section {
+  padding: 10px 2px;
+  border-bottom: 1px solid rgba(31, 35, 41, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-detail-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.chat-detail-value {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #8a9099;
+  word-break: break-word;
 }
 
 .message-row {
@@ -474,6 +605,37 @@ a {
 .panel-page {
   min-height: 100vh;
   padding: 20px;
+}
+
+@media (max-width: 1200px) {
+  .wechat-shell.detail-open .chat-stage {
+    grid-template-columns: minmax(0, 1fr) 264px;
+  }
+
+  .chat-detail-members {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .wechat-shell,
+  .wechat-shell.detail-open {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .chat-stage,
+  .wechat-shell.detail-open .chat-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-detail-pane {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(82vw, 320px);
+    box-shadow: -12px 0 32px rgba(31, 35, 41, 0.12);
+  }
 }
 
 .panel-card {

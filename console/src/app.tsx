@@ -267,6 +267,14 @@ const MuteChatIcon = () => (
   </svg>
 );
 
+const MoreActionsIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-more-icon">
+    <circle cx="6" cy="12" r="1.8" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+    <circle cx="18" cy="12" r="1.8" fill="currentColor" />
+  </svg>
+);
+
 const railItems = [
   { key: "/chats", icon: <ChatRailIcon />, description: "聊天" },
   { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
@@ -870,6 +878,8 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const [sending, setSending] = useState(false);
   const [pendingMuted, setPendingMuted] = useState<boolean | null>(null);
   const [muting, setMuting] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [memberKeyword, setMemberKeyword] = useState("");
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
@@ -891,6 +901,8 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   useEffect(() => {
     setPendingMuted(null);
     setMuting(false);
+    setDetailOpen(false);
+    setMemberKeyword("");
   }, [activeChatId]);
 
   const sendMessage = async () => {
@@ -980,74 +992,132 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     );
   }
 
+  const filteredMembers = snapshot.members.filter((member) => {
+    const query = memberKeyword.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+    return `${member.name} ${member.persona_id}`.toLowerCase().includes(query);
+  });
+  const detailMetaItems =
+    snapshot.mode === "group"
+      ? [
+          { label: "群聊名称", value: snapshot.name },
+          { label: "群成员", value: `${snapshot.members.length} 人` },
+          { label: "群备注", value: "暂无群备注" },
+          { label: "全体禁言", value: effectiveMuted ? "已开启" : "未开启" },
+        ]
+      : [
+          { label: "会话名称", value: snapshot.name },
+          { label: "会话模式", value: "单聊" },
+          { label: "参与成员", value: `${snapshot.members.length} 人` },
+          { label: "会话备注", value: "暂无备注" },
+        ];
+
   return (
-    <div className="wechat-shell">
+    <div className={`wechat-shell ${detailOpen ? "detail-open" : ""}`}>
       <ConversationList chats={chats} selectedChatId={activeChatId} />
 
-      <section className="chat-pane">
-        <header className="chat-header">
-          <div>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {snapshot.name}
-            </Typography.Title>
-          </div>
-          <Space>
-            <Button type="text">查看详情</Button>
-          </Space>
-        </header>
+      <div className="chat-stage">
+        <section className="chat-pane">
+          <header className="chat-header">
+            <div>
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                {snapshot.name}
+              </Typography.Title>
+            </div>
+            <button
+              type="button"
+              className={`chat-more-button ${detailOpen ? "active" : ""}`}
+              aria-label={detailOpen ? "收起详情" : "查看详情"}
+              aria-pressed={detailOpen}
+              onClick={() => setDetailOpen((current) => !current)}
+            >
+              <MoreActionsIcon />
+            </button>
+          </header>
 
-        <div ref={messageStreamRef} className="message-stream">
-          {snapshot.messages.map((message) => (
-            <MessageBubble
-              key={message.message_id}
-              senderName={message.sender_name}
-              senderType={message.sender_type}
-              content={message.content}
-              createdAt={message.created_at}
-              readReceipt={message.read_receipt}
+          <div ref={messageStreamRef} className="message-stream">
+            {snapshot.messages.map((message) => (
+              <MessageBubble
+                key={message.message_id}
+                senderName={message.sender_name}
+                senderType={message.sender_type}
+                content={message.content}
+                createdAt={message.created_at}
+                readReceipt={message.read_receipt}
+              />
+            ))}
+          </div>
+
+          <footer className="composer-panel">
+            <div className="composer-toolbar">
+              {snapshot.mode === "group" ? (
+                <Tooltip title="全体禁言">
+                  <Button
+                    className={`composer-mute ${effectiveMuted ? "active" : ""}`}
+                    type="text"
+                    aria-label="全体禁言"
+                    aria-pressed={effectiveMuted}
+                    disabled={muting}
+                    onClick={() => void toggleMute()}
+                  >
+                    <MuteChatIcon />
+                  </Button>
+                </Tooltip>
+              ) : null}
+            </div>
+            <Input.TextArea
+              autoSize={{ minRows: 4, maxRows: 7 }}
+              bordered={false}
+              placeholder={muteLocked ? "当前群聊已开启全体禁言" : "输入消息，后续这里会接真实发送能力"}
+              value={draft}
+              disabled={muteLocked}
+              onChange={(event) => setDraft(event.target.value)}
+              onPressEnter={(event) => {
+                if (!event.shiftKey) {
+                  event.preventDefault();
+                  void sendMessage();
+                }
+              }}
             />
-          ))}
-        </div>
+            <Flex justify="flex-end" align="center">
+              <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending} disabled={muteLocked}>
+                发送
+              </Button>
+            </Flex>
+          </footer>
+        </section>
 
-        <footer className="composer-panel">
-          <div className="composer-toolbar">
-            {snapshot.mode === "group" ? (
-              <Tooltip title="全体禁言">
-                <Button
-                  className={`composer-mute ${effectiveMuted ? "active" : ""}`}
-                  type="text"
-                  aria-label="全体禁言"
-                  aria-pressed={effectiveMuted}
-                  disabled={muting}
-                  onClick={() => void toggleMute()}
-                >
-                  <MuteChatIcon />
-                </Button>
-              </Tooltip>
-            ) : null}
-          </div>
-          <Input.TextArea
-            autoSize={{ minRows: 4, maxRows: 7 }}
-            bordered={false}
-            placeholder={muteLocked ? "当前群聊已开启全体禁言" : "输入消息，后续这里会接真实发送能力"}
-            value={draft}
-            disabled={muteLocked}
-
-            onChange={(event) => setDraft(event.target.value)}
-            onPressEnter={(event) => {
-              if (!event.shiftKey) {
-                event.preventDefault();
-                void sendMessage();
-              }
-            }}
-          />
-          <Flex justify="flex-end" align="center">
-            <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending} disabled={muteLocked}>
-              发送
-            </Button>
-          </Flex>
-        </footer>
-      </section>
+        {detailOpen ? (
+          <aside className="chat-detail-pane">
+            <div className="chat-detail-search">
+              <Input
+                value={memberKeyword}
+                onChange={(event) => setMemberKeyword(event.target.value)}
+                placeholder={snapshot.mode === "group" ? "搜索群成员" : "搜索成员"}
+                allowClear
+              />
+            </div>
+            <div className="chat-detail-members">
+              {filteredMembers.map((member) => (
+                <div key={member.persona_id} className="chat-detail-member">
+                  <div className="chat-detail-avatar">{member.name.slice(0, 1)}</div>
+                  <div className="chat-detail-name">{member.name}</div>
+                </div>
+              ))}
+            </div>
+            <div className="chat-detail-sections">
+              {detailMetaItems.map((item) => (
+                <section key={item.label} className="chat-detail-section">
+                  <div className="chat-detail-label">{item.label}</div>
+                  <div className="chat-detail-value">{item.value}</div>
+                </section>
+              ))}
+            </div>
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 };

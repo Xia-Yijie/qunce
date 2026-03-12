@@ -11,7 +11,7 @@ from uuid import uuid4
 from server.app.config import settings
 
 
-class SQLiteState:
+class StateStore:
     def __init__(self, db_path: Path) -> None:
         self._lock = Lock()
         self._db_path = db_path
@@ -20,6 +20,7 @@ class SQLiteState:
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
         self._migrate_persona_payloads()
+        self._migrate_chat_payloads()
 
     def _init_schema(self) -> None:
         with self._conn:
@@ -81,6 +82,33 @@ class SQLiteState:
                 self._conn.execute(
                     "UPDATE personas SET payload = ?, updated_at = ? WHERE persona_id = ?",
                     (self._dump(payload), row["updated_at"], row["persona_id"]),
+                )
+
+    def _migrate_chat_payloads(self) -> None:
+        with self._lock, self._conn:
+            rows = self._conn.execute("SELECT chat_id, payload, updated_at FROM chats").fetchall()
+            for row in rows:
+                payload = self._load(row["payload"])
+                previous_mode = str(payload.get("mode", "")).strip()
+                members = [member for member in payload.get("members", []) if isinstance(member, dict)]
+                next_name = "、".join(
+                    str(member.get("name", "")).strip() for member in members[:3] if str(member.get("name", "")).strip()
+                ) or "新聊天"
+                changed = False
+                if previous_mode != "group":
+                    payload["mode"] = "group"
+                    changed = True
+                if not str(payload.get("name", "")).strip():
+                    payload["name"] = next_name
+                    changed = True
+                elif previous_mode == "direct" and len(members) == 1:
+                    payload["name"] = next_name
+                    changed = True
+                if not changed:
+                    continue
+                self._conn.execute(
+                    "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
+                    (self._dump(payload), row["updated_at"], row["chat_id"]),
                 )
 
     def _dump(self, payload: dict | list) -> str:
@@ -221,57 +249,7 @@ class SQLiteState:
             self._conn.execute("DELETE FROM personas WHERE persona_id = ?", (persona_id,))
             return deepcopy(persona)
 
-    def create_or_get_persona_chat(self, persona: dict) -> dict:
-        with self._lock, self._conn:
-            for row in self._conn.execute(
-                "SELECT chat_id, payload FROM chats ORDER BY updated_at DESC, chat_id ASC"
-            ).fetchall():
-                chat = self._load(row["payload"])
-                members = list(chat.get("members", []))
-                if (
-                    chat.get("mode") == "direct"
-                    and len(members) == 1
-                    and members[0].get("persona_id") == persona["persona_id"]
-                ):
-                    snapshot = self._chat_snapshot_locked(row["chat_id"])
-                    if snapshot is not None:
-                        return deepcopy(snapshot)
-
-            now = self._now()
-            chat = {
-                "chat_id": f"chat_{uuid4().hex}",
-                "name": persona.get("name", "新聊天"),
-                "mode": "direct",
-                "muted": False,
-                "members": [
-                    {
-                        "persona_id": persona["persona_id"],
-                        "name": persona.get("name", ""),
-                        "status": persona.get("status", "active"),
-                    }
-                ],
-                "created_at": now,
-                "updated_at": now,
-            }
-            self._conn.execute(
-                """
-                INSERT INTO chats(chat_id, payload, created_at, updated_at)
-                VALUES(?, ?, ?, ?)
-                """,
-                (chat["chat_id"], self._dump(chat), now, now),
-            )
-            return deepcopy(
-                {
-                    **chat,
-                    "messages": [],
-                    "turns": [],
-                }
-            )
-
     def create_or_get_chat(self, personas: list[dict]) -> dict:
-        if len(personas) == 1:
-            return self.create_or_get_persona_chat(personas[0])
-
         with self._lock, self._conn:
             persona_ids = sorted(str(persona["persona_id"]) for persona in personas)
             for row in self._conn.execute(
@@ -288,7 +266,7 @@ class SQLiteState:
             now = self._now()
             chat = {
                 "chat_id": f"chat_{uuid4().hex}",
-                "name": "、".join(persona.get("name", "") for persona in personas[:3]) or "新群聊",
+                "name": "、".join(persona.get("name", "") for persona in personas[:3]) or "新聊天",
                 "mode": "group",
                 "muted": False,
                 "members": [
@@ -469,4 +447,21 @@ class SQLiteState:
             return deepcopy(snapshot)
 
 
-state = SQLiteState(Path(settings.server_data_dir).expanduser() / "server.db")
+def _resolve_state_store_path(data_dir: Path) -> Path:
+    preferred = data_dir / "server-state"
+    legacy = data_dir / "server.db"
+    if preferred.exists() or not legacy.exists():
+        return preferred
+
+    for suffix in ("", "-wal", "-shm"):
+        legacy_path = Path(f"{legacy}{suffix}")
+        if not legacy_path.exists():
+            continue
+        try:
+            legacy_path.rename(Path(f"{preferred}{suffix}"))
+        except OSError:
+            return legacy
+    return preferred
+
+
+state = StateStore(_resolve_state_store_path(Path(settings.server_data_dir).expanduser()))

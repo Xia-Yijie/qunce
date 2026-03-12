@@ -1032,7 +1032,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   };
 
   const toggleMute = async () => {
-    if (!activeChatId || !snapshot || snapshot.mode !== "group") {
+    if (!activeChatId || !snapshot) {
       return;
     }
     const nextMuted = !effectiveMuted;
@@ -1108,20 +1108,12 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     }
     return `${member.name} ${member.persona_id}`.toLowerCase().includes(query);
   });
-  const detailMetaItems =
-    snapshot.mode === "group"
-      ? [
-          { label: "群聊名称", value: snapshot.name },
-          { label: "群成员", value: `${snapshot.members.length} 人` },
-          { label: "群备注", value: "暂无群备注" },
-          { label: "全体禁言", value: effectiveMuted ? "已开启" : "未开启" },
-        ]
-      : [
-          { label: "会话名称", value: snapshot.name },
-          { label: "会话模式", value: "单聊" },
-          { label: "参与成员", value: `${snapshot.members.length} 人` },
-          { label: "会话备注", value: "暂无备注" },
-        ];
+  const detailMetaItems = [
+    { label: "聊天名称", value: snapshot.name },
+    { label: "成员数量", value: `${snapshot.members.length} 人` },
+    { label: "聊天备注", value: "暂无备注" },
+    { label: "全体禁言", value: effectiveMuted ? "已开启" : "未开启" },
+  ];
   const personasById = new Map(personas.map((persona) => [persona.persona_id, persona]));
   const personasByName = new Map(personas.map((persona) => [persona.name, persona]));
   const mentionPersona = (persona: PersonaSummary) => {
@@ -1182,20 +1174,18 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
 
           <footer className="composer-panel">
             <div className="composer-toolbar">
-              {snapshot.mode === "group" ? (
-                <Tooltip title="全体禁言">
-                  <Button
-                    className={`composer-mute ${effectiveMuted ? "active" : ""}`}
-                    type="text"
-                    aria-label="全体禁言"
-                    aria-pressed={effectiveMuted}
-                    disabled={muting}
-                    onClick={() => void toggleMute()}
-                  >
-                    <MuteChatIcon />
-                  </Button>
-                </Tooltip>
-              ) : null}
+              <Tooltip title="全体禁言">
+                <Button
+                  className={`composer-mute ${effectiveMuted ? "active" : ""}`}
+                  type="text"
+                  aria-label="全体禁言"
+                  aria-pressed={effectiveMuted}
+                  disabled={muting}
+                  onClick={() => void toggleMute()}
+                >
+                  <MuteChatIcon />
+                </Button>
+              </Tooltip>
             </div>
             <Input.TextArea
               id="chat-composer"
@@ -1225,7 +1215,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               <Input
                 value={memberKeyword}
                 onChange={(event) => setMemberKeyword(event.target.value)}
-                placeholder={snapshot.mode === "group" ? "搜索群成员" : "搜索成员"}
+                placeholder="搜索成员"
                 allowClear
               />
             </div>

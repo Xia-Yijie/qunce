@@ -20,10 +20,10 @@ func openLocalStore(workDir string) (*localStore, error) {
 		return nil, fmt.Errorf("create workdir: %w", err)
 	}
 
-	dbPath := filepath.Join(workDir, "agent.db")
-	db, err := sql.Open("sqlite", dbPath)
+	statePath := resolveLocalStatePath(workDir)
+	db, err := sql.Open("sqlite", statePath)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite db: %w", err)
+		return nil, fmt.Errorf("open local state: %w", err)
 	}
 
 	store := &localStore{db: db}
@@ -52,10 +52,32 @@ func (s *localStore) init() error {
 			created_at TEXT NOT NULL
 		);
 	`); err != nil {
-		return fmt.Errorf("init sqlite schema: %w", err)
+		return fmt.Errorf("init local state schema: %w", err)
 	}
 
 	return nil
+}
+
+func resolveLocalStatePath(workDir string) string {
+	preferred := filepath.Join(workDir, "agent-state")
+	legacy := filepath.Join(workDir, "agent.db")
+	if _, err := os.Stat(preferred); err == nil {
+		return preferred
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return preferred
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		legacyPath := legacy + suffix
+		if _, err := os.Stat(legacyPath); err != nil {
+			continue
+		}
+		if err := os.Rename(legacyPath, preferred+suffix); err != nil {
+			return legacy
+		}
+	}
+	return preferred
 }
 
 func (s *localStore) Close() error {

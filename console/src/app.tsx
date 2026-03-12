@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   App as AntApp,
   Badge,
@@ -115,6 +115,11 @@ type ChatSnapshot = {
   }>;
 };
 
+type AddChatMembersResponse = {
+  chat: ChatSnapshot;
+  added_persona_ids: string[];
+};
+
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   if (!response.ok) {
@@ -167,6 +172,15 @@ const api = {
     }),
   rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
   chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
+  addChatMembers: (chatId: string, payload: { personaIds: string[]; actorName?: string }) =>
+    fetchJson<AddChatMembersResponse>(`/api/chats/${chatId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona_ids: payload.personaIds,
+        actor_name: payload.actorName,
+      }),
+    }),
   toggleChatMute: (chatId: string, muted: boolean) =>
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/mute`, {
       method: "POST",
@@ -296,6 +310,13 @@ const MoreActionsIcon = () => (
     <circle cx="6" cy="12" r="1.8" fill="currentColor" />
     <circle cx="12" cy="12" r="1.8" fill="currentColor" />
     <circle cx="18" cy="12" r="1.8" fill="currentColor" />
+  </svg>
+);
+
+const AddMemberIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="chat-detail-add-icon">
+    <path d="M12 6V18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M6 12H18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
   </svg>
 );
 
@@ -444,6 +465,138 @@ const StartChatDialog = ({
   );
 };
 
+const AddMembersDialog = ({
+  open,
+  chatId,
+  personas,
+  existingPersonaIds,
+  onClose,
+  onAdded,
+}: {
+  open: boolean;
+  chatId: string | null;
+  personas: PersonaSummary[];
+  existingPersonaIds: string[];
+  onClose: () => void;
+  onAdded: (payload: AddChatMembersResponse) => void;
+}) => {
+  const { message } = AntApp.useApp();
+  const [keyword, setKeyword] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setKeyword("");
+      setSelectedIds([]);
+      setSaving(false);
+    }
+  }, [open]);
+
+  const availablePersonas = useMemo(
+    () => personas.filter((persona) => !existingPersonaIds.includes(persona.persona_id)),
+    [existingPersonaIds, personas],
+  );
+
+  const filteredPersonas = useMemo(() => {
+    const query = keyword.trim().toLowerCase();
+    if (!query) {
+      return availablePersonas;
+    }
+    return availablePersonas.filter((persona) => {
+      const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availablePersonas, keyword]);
+
+  const togglePersona = (personaId: string) => {
+    setSelectedIds((current) =>
+      current.includes(personaId) ? current.filter((item) => item !== personaId) : [...current, personaId],
+    );
+  };
+
+  const submit = async () => {
+    if (!chatId || selectedIds.length === 0 || saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = await api.addChatMembers(chatId, { personaIds: selectedIds, actorName: "群成员" });
+      onAdded(payload);
+      if (payload.added_persona_ids.length === 0) {
+        message.info("所选成员已在当前聊天中");
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "添加成员失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onCancel={() => !saving && onClose()} footer={null} centered width={720} title="添加成员" destroyOnHidden>
+      <div className="start-chat-dialog">
+        <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索成员" className="start-chat-search" />
+        <div className="start-chat-dialog-body">
+          <div className="start-chat-list">
+            {filteredPersonas.length === 0 ? (
+              <div className="start-chat-empty">没有可添加的成员</div>
+            ) : (
+              filteredPersonas.map((persona) => {
+                const checked = selectedIds.includes(persona.persona_id);
+                return (
+                  <button
+                    key={persona.persona_id}
+                    type="button"
+                    className={`start-chat-persona ${checked ? "selected" : ""}`}
+                    onClick={() => togglePersona(persona.persona_id)}
+                  >
+                    <Checkbox checked={checked} />
+                    <PersonaAvatar persona={persona} className="directory-avatar agent" />
+                    <div className="directory-copy">
+                      <Typography.Text strong>{persona.name}</Typography.Text>
+                      <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className="start-chat-selection">
+            <Typography.Title level={5} style={{ marginTop: 0 }}>
+              已选成员
+            </Typography.Title>
+            {selectedIds.length === 0 ? (
+              <div className="start-chat-empty">选择要加入当前聊天的成员</div>
+            ) : (
+              <div className="start-chat-selected-tags">
+                {selectedIds.map((personaId) => {
+                  const persona = personas.find((item) => item.persona_id === personaId);
+                  if (!persona) {
+                    return null;
+                  }
+                  return (
+                    <button key={personaId} type="button" className="start-chat-tag" onClick={() => togglePersona(personaId)}>
+                      {persona.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="start-chat-actions">
+          <Button onClick={onClose} disabled={saving}>
+            取消
+          </Button>
+          <Button type="primary" onClick={() => void submit()} loading={saving} disabled={selectedIds.length === 0 || !chatId}>
+            添加
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
 const useConsoleSocket = (chatId: string | null) => {
   const queryClient = useQueryClient();
   const [connected, setConnected] = useState(false);
@@ -989,6 +1142,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const [muting, setMuting] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [memberKeyword, setMemberKeyword] = useState("");
+  const [addMembersOpen, setAddMembersOpen] = useState(false);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
@@ -1013,6 +1167,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     setMuting(false);
     setDetailOpen(false);
     setMemberKeyword("");
+    setAddMembersOpen(false);
   }, [activeChatId]);
 
   const sendMessage = async () => {
@@ -1128,6 +1283,30 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const mutePersona = (persona: PersonaSummary) => {
     message.info(`暂未支持单独禁言智能体 ${persona.name}`);
   };
+  const handleMembersAdded = (payload: AddChatMembersResponse) => {
+    queryClient.setQueryData(["chat", payload.chat.chat_id], payload.chat);
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+      (previous ?? []).map((chat) =>
+        chat.chat_id === payload.chat.chat_id
+          ? {
+              ...chat,
+              member_count: payload.chat.members.length,
+              message_count: payload.chat.messages.length,
+              last_message_at:
+                payload.chat.messages.length > 0
+                  ? payload.chat.messages[payload.chat.messages.length - 1]?.created_at
+                  : (chat.last_message_at ?? null),
+            }
+          : chat,
+      ),
+    );
+    setAddMembersOpen(false);
+    if (payload.added_persona_ids.length > 0) {
+      message.success(`已添加 ${payload.added_persona_ids.length} 个成员`);
+    } else {
+      message.info("所选成员已在当前聊天中");
+    }
+  };
 
   return (
     <div className={`wechat-shell ${detailOpen ? "detail-open" : ""}`}>
@@ -1226,6 +1405,16 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
                   <div className="chat-detail-name">{member.name}</div>
                 </div>
               ))}
+              <button
+                type="button"
+                className="chat-detail-member chat-detail-member-add"
+                onClick={() => setAddMembersOpen(true)}
+              >
+                <div className="chat-detail-avatar chat-detail-avatar-add">
+                  <AddMemberIcon />
+                </div>
+                <div className="chat-detail-name">添加</div>
+              </button>
             </div>
             <div className="chat-detail-sections">
               {detailMetaItems.map((item) => (
@@ -1237,6 +1426,14 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
             </div>
           </aside>
         ) : null}
+        <AddMembersDialog
+          open={addMembersOpen}
+          chatId={activeChatId ?? null}
+          personas={personas}
+          existingPersonaIds={snapshot.members.map((member) => member.persona_id)}
+          onClose={() => setAddMembersOpen(false)}
+          onAdded={handleMembersAdded}
+        />
       </div>
     </div>
   );
@@ -2038,3 +2235,4 @@ const AppShell = () => {
 };
 
 export const App = AppShell;
+

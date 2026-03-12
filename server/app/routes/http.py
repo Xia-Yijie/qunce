@@ -14,7 +14,7 @@ from server.app.serializers import (
     persona_summary_payload,
 )
 from server.app.services.agents import agent_connections
-from server.app.services.events import broadcast_node_updates, update_node
+from server.app.services.events import add_chat_message, broadcast_chat_snapshot, broadcast_node_updates, update_node
 from server.app.services.turns import create_user_turn, set_chat_muted
 from server.app.state import state
 
@@ -69,6 +69,54 @@ def chat_snapshot(chat_id: str) -> Any:
     if snapshot is None:
         abort(404, "chat_not_found")
     return jsonify(chat_snapshot_payload(snapshot))
+
+
+@app.post("/api/chats/<chat_id>/members")
+def add_chat_members(chat_id: str) -> Any:
+    payload = request.get_json(silent=True) or {}
+    raw_persona_ids = payload.get("persona_ids")
+    actor_name = str(payload.get("actor_name", "群成员")).strip() or "群成员"
+    if not isinstance(raw_persona_ids, list):
+        abort(400, "persona_ids_required")
+
+    persona_ids = [str(item).strip() for item in raw_persona_ids if str(item).strip()]
+    if not persona_ids:
+        abort(400, "persona_ids_required")
+
+    chat = state.chat_snapshot(chat_id)
+    if chat is None:
+        abort(404, "chat_not_found")
+
+    personas = [persona for persona in state.list_personas() if str(persona.get("persona_id", "")) in set(persona_ids)]
+    if len(personas) != len(set(persona_ids)):
+        abort(404, "persona_not_found")
+
+    ordered_personas = sorted(personas, key=lambda persona: persona_ids.index(str(persona.get("persona_id", ""))))
+    result = state.add_members_to_chat(chat_id, ordered_personas)
+    if result is None:
+        abort(404, "chat_not_found")
+
+    snapshot = result["chat"]
+    added_persona_ids = list(result.get("added_persona_ids", []))
+    if added_persona_ids:
+        added_names = [str(persona.get("name", "")).strip() for persona in ordered_personas if str(persona.get("persona_id", "")) in set(added_persona_ids)]
+        add_chat_message(
+            chat_id,
+            sender_type="event",
+            sender_name=actor_name,
+            content=f"已添加成员：{'、'.join(name for name in added_names if name)}",
+            metadata={"event_type": "chat.members.added", "persona_ids": added_persona_ids},
+        )
+        snapshot = state.chat_snapshot(chat_id) or snapshot
+    else:
+        broadcast_chat_snapshot(chat_id)
+
+    return jsonify(
+        {
+            "chat": chat_snapshot_payload(snapshot),
+            "added_persona_ids": added_persona_ids,
+        }
+    ), 200
 
 
 @app.post("/api/chats/<chat_id>/messages")

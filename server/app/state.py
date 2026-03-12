@@ -357,6 +357,51 @@ class StateStore:
             )
             return deepcopy(chat)
 
+    def add_members_to_chat(self, chat_id: str, personas: list[dict]) -> dict | None:
+        with self._lock, self._conn:
+            chat = self._get_payload("chats", "chat_id", chat_id)
+            if chat is None:
+                return None
+
+            members = list(chat.get("members", []))
+            existing_ids = {
+                str(member.get("persona_id", "")).strip()
+                for member in members
+                if str(member.get("persona_id", "")).strip()
+            }
+            added_persona_ids: list[str] = []
+            for persona in personas:
+                persona_id = str(persona.get("persona_id", "")).strip()
+                if not persona_id or persona_id in existing_ids:
+                    continue
+                members.append(
+                    {
+                        "persona_id": persona_id,
+                        "name": str(persona.get("name", "")).strip(),
+                        "status": str(persona.get("status", "active")).strip() or "active",
+                    }
+                )
+                existing_ids.add(persona_id)
+                added_persona_ids.append(persona_id)
+
+            if not added_persona_ids:
+                snapshot = self._chat_snapshot_locked(chat_id)
+                if snapshot is None:
+                    return None
+                return {"chat": deepcopy(snapshot), "added_persona_ids": []}
+
+            now = self._now()
+            chat["members"] = members
+            chat["updated_at"] = now
+            self._conn.execute(
+                "UPDATE chats SET payload = ?, updated_at = ? WHERE chat_id = ?",
+                (self._dump(chat), now, chat_id),
+            )
+            snapshot = self._chat_snapshot_locked(chat_id)
+            if snapshot is None:
+                return None
+            return {"chat": deepcopy(snapshot), "added_persona_ids": added_persona_ids}
+
     def create_turn(
         self,
         chat_id: str,

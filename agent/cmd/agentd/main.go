@@ -244,6 +244,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 			_ = cfg.Store.RecordEvent(message.Type, string(message.Data))
 			if message.Type == "server.turn.request" {
 				go runtime.handleTurnRequest(ctx, message)
+				continue
+			}
+			if message.Type == "server.workspace.validate" {
+				go runtime.handleWorkspaceValidation(ctx, message)
 			}
 		}
 	}()
@@ -272,10 +276,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 }
 
 type turnRequestData struct {
-	TurnID     string `json:"turn_id"`
-	ChatID     string `json:"chat_id"`
-	Content    string `json:"content"`
-	SenderName string `json:"sender_name"`
+	TurnID       string `json:"turn_id"`
+	ChatID       string `json:"chat_id"`
+	MessageID    string `json:"message_id"`
+	Content      string `json:"content"`
+	SenderName   string `json:"sender_name"`
+	PersonaID    string `json:"persona_id"`
+	PersonaName  string `json:"persona_name"`
+	WorkspaceDir string `json:"workspace_dir"`
+	SystemPrompt string `json:"system_prompt"`
+	AgentKey     string `json:"agent_key"`
+	AgentLabel   string `json:"agent_label"`
+	Muted        bool   `json:"muted"`
+}
+
+type workspaceValidationRequest struct {
+	WorkspaceDir string `json:"workspace_dir"`
 }
 
 func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelope) {
@@ -286,6 +302,19 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 	}
 
 	if data.TurnID == "" {
+		return
+	}
+
+	if err := r.send(ctx, buildEnvelope("agent.turn.read", r.cfg.NodeID, map[string]any{
+		"turn_id":          data.TurnID,
+		"worker_count":     0,
+		"running_turn_ids": []string{},
+	})); err != nil {
+		r.logger.Warn("failed to send turn read", "error", err, "turn_id", data.TurnID)
+		return
+	}
+
+	if data.Muted {
 		return
 	}
 
@@ -310,6 +339,31 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 	}
 }
 
+func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message rawEnvelope) {
+	var data workspaceValidationRequest
+	if err := json.Unmarshal(message.Data, &data); err != nil {
+		r.logger.Warn("failed to decode workspace validation request", "error", err)
+		return
+	}
+
+	ok, normalizedPath, detail := validateWorkspacePath(strings.TrimSpace(data.WorkspaceDir))
+	if err := r.send(
+		ctx,
+		buildReplyEnvelope(
+			"agent.workspace.validated",
+			r.cfg.NodeID,
+			message.RequestID,
+			map[string]any{
+				"ok":              ok,
+				"normalized_path": normalizedPath,
+				"message":         detail,
+			},
+		),
+	); err != nil {
+		r.logger.Warn("failed to send workspace validation result", "error", err)
+	}
+}
+
 func (r *agentRuntime) send(ctx context.Context, payload map[string]any) error {
 	r.sendLock.Lock()
 	defer r.sendLock.Unlock()
@@ -317,6 +371,10 @@ func (r *agentRuntime) send(ctx context.Context, payload map[string]any) error {
 }
 
 func buildEnvelope(messageType, nodeID string, data map[string]any) map[string]any {
+	return buildReplyEnvelope(messageType, nodeID, fmt.Sprintf("req_%d", time.Now().UnixNano()), data)
+}
+
+func buildReplyEnvelope(messageType, nodeID, requestID string, data map[string]any) map[string]any {
 	targetID := "main"
 	if nodeID == "" {
 		nodeID = "unbound"
@@ -326,7 +384,7 @@ func buildEnvelope(messageType, nodeID string, data map[string]any) map[string]a
 		"v":          1,
 		"type":       messageType,
 		"event_id":   fmt.Sprintf("evt_%d", time.Now().UnixNano()),
-		"request_id": fmt.Sprintf("req_%d", time.Now().UnixNano()),
+		"request_id": requestID,
 		"ts":         time.Now().UTC().Format(time.RFC3339),
 		"source": map[string]any{
 			"kind": "agent",
@@ -348,6 +406,75 @@ func readEnvelope(ctx context.Context, conn *websocket.Conn) (rawEnvelope, error
 	var env rawEnvelope
 	err := wsjson.Read(ctx, conn, &env)
 	return env, err
+}
+
+func validateWorkspacePath(raw string) (bool, string, string) {
+	if raw == "" {
+		return false, "", "工作目录不能为空"
+	}
+
+	normalized := filepath.Clean(raw)
+	if !filepath.IsAbs(normalized) {
+		return false, normalized, "工作目录必须是绝对路径"
+	}
+
+	info, err := os.Stat(normalized)
+	if err == nil {
+		if !info.IsDir() {
+			return false, normalized, "该路径已存在，但不是目录"
+		}
+		entries, readErr := os.ReadDir(normalized)
+		if readErr != nil {
+			return false, normalized, "目录不可读取，请检查权限"
+		}
+		if len(entries) > 0 {
+			return false, normalized, "目录必须为空"
+		}
+		if writeErr := verifyDirectoryWritable(normalized); writeErr != nil {
+			return false, normalized, "目录不可写，请检查权限"
+		}
+		return true, normalized, "目录可用：已存在且为空目录"
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, normalized, "无法访问该目录，请检查权限"
+	}
+
+	parent := filepath.Dir(normalized)
+	parentInfo, parentErr := os.Stat(parent)
+	if parentErr != nil {
+		if errors.Is(parentErr, os.ErrNotExist) {
+			return false, normalized, "父目录不存在，无法在这里创建"
+		}
+		return false, normalized, "无法访问父目录，请检查权限"
+	}
+	if !parentInfo.IsDir() {
+		return false, normalized, "父路径不是目录"
+	}
+	if writeErr := verifyParentCreatable(parent); writeErr != nil {
+		return false, normalized, "父目录不可写，无法创建该目录"
+	}
+	return true, normalized, "目录可用：目标目录不存在，但可以创建"
+}
+
+func verifyDirectoryWritable(dir string) error {
+	probe, err := os.CreateTemp(dir, ".qunce-write-check-*")
+	if err != nil {
+		return err
+	}
+	if closeErr := probe.Close(); closeErr != nil {
+		_ = os.Remove(probe.Name())
+		return closeErr
+	}
+	return os.Remove(probe.Name())
+}
+
+func verifyParentCreatable(parent string) error {
+	probeDir, err := os.MkdirTemp(parent, ".qunce-create-check-*")
+	if err != nil {
+		return err
+	}
+	return os.Remove(probeDir)
 }
 
 func normalizeServerAddress(raw string) (string, string, error) {

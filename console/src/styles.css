@@ -1,3 +1,9 @@
+html,
+body,
+#root {
+  height: 100%;
+}
+
 :root {
   color: #1f2329;
   background:
@@ -18,6 +24,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 a {
@@ -25,16 +32,13 @@ a {
   text-decoration: none;
 }
 
-#root {
-  min-height: 100vh;
-}
-
 .frame-layout {
-  min-height: 100vh;
+  height: 100vh;
   background: transparent;
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  overflow: hidden;
 }
 
 .nav-rail {
@@ -120,12 +124,13 @@ a {
 .frame-content {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .wechat-shell {
-  min-height: 100vh;
+  height: 100%;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   overflow: hidden;
@@ -153,6 +158,7 @@ a {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .conversation-header {
@@ -246,6 +252,7 @@ a {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+  min-height: 0;
 }
 
 .chat-pane.empty-pane {
@@ -268,6 +275,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-height: 0;
 }
 
 .message-row {
@@ -277,6 +285,10 @@ a {
 }
 
 .message-row.system {
+  align-self: center;
+}
+
+.message-row.event {
   align-self: center;
 }
 
@@ -338,6 +350,65 @@ a {
   background: #ffffff;
 }
 
+.message-event-badge {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(31, 35, 41, 0.06);
+  font-size: 12px;
+}
+
+.message-bubble-wrap {
+  position: relative;
+  margin-top: 6px;
+}
+
+.message-read-anchor {
+  position: absolute;
+  left: -24px;
+  bottom: -2px;
+}
+
+.message-read-badge {
+  border: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(31, 35, 41, 0.14);
+  border: 2px solid #14b8a6;
+}
+
+.message-read-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #14b8a6;
+}
+
+.message-read-panel {
+  min-width: 260px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.message-read-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-read-member,
+.message-read-empty {
+  font-size: 13px;
+  color: #4d5258;
+}
+
 .composer-panel {
   padding: 10px 18px 18px;
   border-top: 1px solid rgba(31, 35, 41, 0.08);
@@ -357,6 +428,25 @@ a {
 .composer-toolbar .ant-btn {
   color: #4d5258;
   font-size: 18px;
+}
+
+.composer-mute {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.composer-mute-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: #4d5258;
+}
+
+.composer-mute.active .composer-mute-icon {
+  color: #e64545;
 }
 
 .composer-panel .ant-input {
@@ -582,8 +672,7 @@ a {
   box-shadow: none;
 }
 
-.directory-accept-button:hover,
-.profile-accept-button:hover {
+.directory-accept-button:hover {
   border-color: rgba(39, 110, 241, 0.32) !important;
   color: #174aa4 !important;
 }
@@ -623,6 +712,85 @@ a {
   color: #2f343a;
 }
 
+.start-chat-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.start-chat-search {
+  width: 100%;
+}
+
+.start-chat-dialog-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
+  gap: 16px;
+  min-height: 320px;
+}
+
+.start-chat-list,
+.start-chat-selection {
+  border-radius: 18px;
+  background: #f6f7f9;
+  padding: 14px;
+}
+
+.start-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.start-chat-persona {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.start-chat-persona.selected {
+  border-color: rgba(24, 133, 114, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(24, 133, 114, 0.08);
+}
+
+.start-chat-persona .ant-checkbox {
+  flex: 0 0 auto;
+}
+
+.start-chat-empty {
+  color: #8b9198;
+  line-height: 1.7;
+}
+
+.start-chat-selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.start-chat-tag {
+  border: 0;
+  border-radius: 999px;
+  background: #e3f1ec;
+  color: #1a6457;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.start-chat-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .quick-create-menu-icon {
   width: 20px;
   height: 20px;
@@ -642,11 +810,30 @@ a {
   border-radius: 0 !important;
 }
 
+.profile-action-button,
 .profile-accept-button {
-  min-width: 104px;
+  min-width: 144px;
   height: 40px;
   border-radius: 12px;
   box-shadow: none;
+}
+
+.profile-danger-button {
+  border-color: #db5b52 !important;
+  background: #db5b52 !important;
+  color: #ffffff !important;
+}
+
+.profile-danger-button:hover,
+.profile-danger-button:focus {
+  border-color: #c14c44 !important;
+  background: #c14c44 !important;
+  color: #ffffff !important;
+}
+
+.profile-accept-button:hover,
+.profile-accept-button:focus {
+  color: #ffffff !important;
 }
 
 .directory-detail-pane {
@@ -693,6 +880,10 @@ a {
 
 .profile-actions {
   margin-top: 24px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .profile-row {
@@ -706,6 +897,12 @@ a {
 
 .profile-label {
   color: #9aa0a8;
+}
+
+.profile-value-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
 }
 
 .accept-dialog-body {
@@ -775,6 +972,14 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.wizard-textarea-fill {
+  width: 100%;
+}
+
+.wizard-textarea-fill textarea {
+  min-height: 260px !important;
 }
 
 .wizard-path-actions {
@@ -896,7 +1101,7 @@ a {
   }
 
   .wechat-shell {
-    min-height: calc(100vh - 78px);
+    height: calc(100vh - 78px);
     grid-template-columns: 1fr;
   }
 

@@ -12,31 +12,84 @@ def meta_payload(*, app_name: str, app_version: str) -> dict[str, Any]:
 
 
 def chat_summary_payload(chat: dict[str, Any]) -> dict[str, Any]:
+    visible_messages = [message for message in chat.get("messages", []) if message.get("sender_type") != "system"]
+    last_message_at = None
+    if visible_messages:
+        last_message_at = visible_messages[-1].get("created_at")
     return {
         "chat_id": chat["chat_id"],
         "name": chat["name"],
         "mode": chat["mode"],
+        "muted": bool(chat.get("muted", False)),
         "member_count": len(chat.get("members", [])),
-        "message_count": len(chat.get("messages", [])),
+        "message_count": len(visible_messages),
+        "last_message_at": last_message_at,
     }
 
 
 def chat_snapshot_payload(chat: dict[str, Any]) -> dict[str, Any]:
-    return deepcopy(chat)
+    payload = deepcopy(chat)
+    members = [
+        {
+            "persona_id": str(member.get("persona_id", "")),
+            "name": str(member.get("name", "")),
+            "status": str(member.get("status", "active")),
+        }
+        for member in payload.get("members", [])
+        if str(member.get("persona_id", "")).strip()
+    ]
+    turns_by_message_id: dict[str, list[dict[str, Any]]] = {}
+    for turn in payload.get("turns", []):
+        if not isinstance(turn, dict):
+            continue
+        message_id = str(turn.get("message_id", "")).strip()
+        if not message_id:
+            continue
+        turns_by_message_id.setdefault(message_id, []).append(turn)
+
+    messages: list[dict[str, Any]] = []
+    for message in payload.get("messages", []):
+        if message.get("sender_type") == "system":
+            continue
+
+        normalized = {
+            **message,
+            "metadata": dict(message.get("metadata") or {}),
+        }
+        if normalized.get("sender_type") == "user":
+            message_turns = turns_by_message_id.get(str(normalized.get("message_id", "")), [])
+            read_persona_ids = {
+                str(turn.get("persona_id", "")).strip()
+                for turn in message_turns
+                if str(turn.get("status", "")) in {"read", "running", "completed"}
+            }
+            read_by = deepcopy([member for member in members if member["persona_id"] in read_persona_ids])
+            unread_by = deepcopy([member for member in members if member["persona_id"] not in read_persona_ids])
+            normalized["read_receipt"] = {
+                "read_count": len(read_by),
+                "unread_count": len(unread_by),
+                "total_count": len(members),
+                "read_by": read_by,
+                "unread_by": unread_by,
+            }
+        messages.append(normalized)
+
+    payload["messages"] = messages
+    payload["muted"] = bool(payload.get("muted", False))
+    return payload
 
 
 def persona_summary_payload(persona: dict[str, Any]) -> dict[str, Any]:
     return {
         "persona_id": persona["persona_id"],
         "name": persona["name"],
-        "role_summary": persona.get("role_summary", ""),
         "status": persona.get("status", "active"),
         "node_id": persona.get("node_id", ""),
         "node_name": persona.get("node_name", ""),
         "workspace_dir": persona.get("workspace_dir", ""),
         "system_prompt": persona.get("system_prompt", ""),
         "agent_key": persona.get("agent_key", "codex-general"),
-        "agent_label": persona.get("agent_label", "通用协作"),
+        "agent_label": persona.get("agent_label", "codex"),
         "model_provider": persona.get("model_provider", "codex"),
     }
 

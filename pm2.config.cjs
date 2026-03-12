@@ -11,12 +11,12 @@ module.exports = {
     {
       name: "qunce-server",
       cwd: root,
-      script: python,
-      args: "-m server.app.main",
-      interpreter: "none",
+      script: path.join(root, "server", "run_server.py"),
+      interpreter: python,
       env: {
         QUNCE_SERVER_HOST: "0.0.0.0",
         QUNCE_SERVER_PORT: "8000",
+        PYTHONPATH: root,
       },
     },
   ],

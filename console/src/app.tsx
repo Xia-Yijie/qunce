@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   App as AntApp,
   Badge,
   Button,
+  Checkbox,
   Dropdown,
   Empty,
   Flex,
@@ -10,10 +11,12 @@ import {
   Layout,
   List,
   Modal,
+  Popover,
   Select,
   Space,
   Spin,
   Steps,
+  Tooltip,
   Typography,
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
@@ -24,8 +27,10 @@ type ChatSummary = {
   chat_id: string;
   name: string;
   mode: string;
+  muted?: boolean;
   member_count: number;
   message_count: number;
+  last_message_at?: string | null;
 };
 
 type NodeSummary = {
@@ -50,7 +55,6 @@ type NodeSummary = {
 type PersonaSummary = {
   persona_id: string;
   name: string;
-  role_summary: string;
   status: string;
   node_id: string;
   node_name: string;
@@ -65,7 +69,6 @@ type CreatePersonaPayload = {
   name: string;
   node_id: string;
   workspace_dir: string;
-  role_summary: string;
   system_prompt: string;
   agent_key: string;
   agent_label: string;
@@ -81,6 +84,7 @@ type ChatSnapshot = {
   chat_id: string;
   name: string;
   mode: string;
+  muted?: boolean;
   members: Array<{ persona_id: string; name: string; status: string }>;
   messages: Array<{
     message_id: string;
@@ -89,13 +93,31 @@ type ChatSnapshot = {
     content: string;
     status: string;
     created_at: string;
+    read_receipt?: {
+      read_count: number;
+      unread_count: number;
+      total_count: number;
+      read_by: Array<{ persona_id: string; name: string; status: string }>;
+      unread_by: Array<{ persona_id: string; name: string; status: string }>;
+    };
   }>;
 };
 
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error((await response.text()) || `request failed: ${url}`);
+    const text = await response.text();
+    if (text) {
+      let message: string | null = null;
+      try {
+        const payload = JSON.parse(text) as { message?: string };
+        message = payload.message ?? null;
+      } catch {
+        message = null;
+      }
+      throw new Error(message || text);
+    }
+    throw new Error(`request failed: ${url}`);
   }
   return response.json() as Promise<T>;
 };
@@ -106,6 +128,12 @@ const agentOptions = [
 
 const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
+  createChat: (personaIds: string[]) =>
+    fetchJson<ChatSummary>("/api/chat-start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persona_ids: personaIds }),
+    }),
   nodes: () => fetchJson<NodeSummary[]>("/api/nodes"),
   acceptNode: (nodeId: string, payload: { display_symbol: string; remark: string }) =>
     fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
@@ -115,12 +143,24 @@ const api = {
     }),
   rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
   chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
+  toggleChatMute: (chatId: string, muted: boolean) =>
+    fetchJson<ChatSnapshot>(`/api/chats/${chatId}/mute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ muted, actor_name: "群状态" }),
+    }),
   personas: () => fetchJson<PersonaSummary[]>("/api/personas"),
   createPersona: (payload: CreatePersonaPayload) =>
     fetchJson<PersonaSummary>("/api/personas", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }),
+  deletePersona: (personaId: string) =>
+    fetchJson<{ ok: boolean }>("/api/personas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _action: "delete", persona_id: personaId }),
     }),
   validateWorkspace: (nodeId: string, workspaceDir: string) =>
     fetchJson<WorkspaceValidation>(`/api/nodes/${nodeId}/workspace-check`, {
@@ -212,6 +252,21 @@ const SettingsRailIcon = () => (
   </svg>
 );
 
+const MuteChatIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="composer-mute-icon">
+    <path
+      d="M5 14H8.5L13 18V6L8.5 10H5V14Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M16.5 9L20 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <path d="M20 9L16.5 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  </svg>
+);
+
 const railItems = [
   { key: "/chats", icon: <ChatRailIcon />, description: "聊天" },
   { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
@@ -222,6 +277,140 @@ const settingsRailItem = { key: "/settings/runtime", icon: <SettingsRailIcon />,
 const getPendingNodeCount = (nodes: NodeSummary[]) => nodes.filter((node) => node.can_accept).length;
 
 const getChatPath = (chatId: string) => `/chats/${chatId}`;
+
+const StartChatDialog = ({
+  open,
+  personas,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  personas: PersonaSummary[];
+  onClose: () => void;
+  onCreated: (chat: ChatSummary) => void;
+}) => {
+  const { message } = AntApp.useApp();
+  const [keyword, setKeyword] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setKeyword("");
+      setSelectedIds([]);
+      setCreating(false);
+    }
+  }, [open]);
+
+  const filteredPersonas = useMemo(() => {
+    const query = keyword.trim().toLowerCase();
+    if (!query) {
+      return personas;
+    }
+    return personas.filter((persona) => {
+      const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [keyword, personas]);
+
+  const togglePersona = (personaId: string) => {
+    setSelectedIds((current) =>
+      current.includes(personaId) ? current.filter((item) => item !== personaId) : [...current, personaId],
+    );
+  };
+
+  const submit = async () => {
+    if (selectedIds.length === 0 || creating) {
+      return;
+    }
+    setCreating(true);
+    try {
+      const chat = await api.createChat(selectedIds);
+      onCreated(chat);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "发起聊天失败");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={() => !creating && onClose()}
+      footer={null}
+      centered
+      width={720}
+      title="发起群聊"
+      destroyOnHidden
+    >
+      <div className="start-chat-dialog">
+        <Input
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          placeholder="搜索智能体"
+          className="start-chat-search"
+        />
+        <div className="start-chat-dialog-body">
+          <div className="start-chat-list">
+            {filteredPersonas.length === 0 ? (
+              <div className="start-chat-empty">暂无可选的智能体，请先创建角色后再发起聊天。</div>
+            ) : (
+              filteredPersonas.map((persona) => {
+                const checked = selectedIds.includes(persona.persona_id);
+                return (
+                  <button
+                    key={persona.persona_id}
+                    type="button"
+                    className={`start-chat-persona ${checked ? "selected" : ""}`}
+                    onClick={() => togglePersona(persona.persona_id)}
+                  >
+                    <Checkbox checked={checked} />
+                    <div className="directory-avatar agent">{persona.name.slice(0, 1)}</div>
+                    <div className="directory-copy">
+                      <Typography.Text strong>{persona.name}</Typography.Text>
+                      <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className="start-chat-selection">
+            <Typography.Title level={5} style={{ marginTop: 0 }}>
+              已选择的智能体
+            </Typography.Title>
+            {selectedIds.length === 0 ? (
+               <div className="start-chat-empty">请选择至少一个智能体加入会话，右侧会显示当前已选成员。</div>
+            ) : (
+              <div className="start-chat-selected-tags">
+                {selectedIds.map((personaId) => {
+                  const persona = personas.find((item) => item.persona_id === personaId);
+                  if (!persona) {
+                    return null;
+                  }
+                  return (
+                    <button key={personaId} type="button" className="start-chat-tag" onClick={() => togglePersona(personaId)}>
+                      {persona.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="start-chat-actions">
+          <Button onClick={onClose} disabled={creating}>
+            取消
+          </Button>
+          <Button type="primary" onClick={() => void submit()} loading={creating} disabled={selectedIds.length === 0}>
+            创建聊天
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
 
 const useConsoleSocket = (chatId: string | null) => {
   const queryClient = useQueryClient();
@@ -234,7 +423,7 @@ const useConsoleSocket = (chatId: string | null) => {
 
     socket.addEventListener("open", () => {
       setConnected(true);
-      setLastNotice("已连接群聊通道");
+      setLastNotice("群聊通道已连接");
       socket.send(
         JSON.stringify({
           v: 1,
@@ -270,6 +459,10 @@ const useConsoleSocket = (chatId: string | null) => {
                   ...chat,
                   member_count: data.members.length,
                   message_count: data.messages.length,
+                  last_message_at:
+                    data.messages.length > 0
+                      ? data.messages[data.messages.length - 1]?.created_at
+                      : (chat.last_message_at ?? null),
                 }
               : chat,
           ),
@@ -308,6 +501,34 @@ const formatMessageTime = (raw: string) => {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
+  }).format(date);
+};
+
+const formatConversationTime = (raw?: string | null) => {
+  if (!raw) {
+    return "";
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const now = new Date();
+  const isSameDay =
+    now.getFullYear() === date.getFullYear() &&
+    now.getMonth() === date.getMonth() &&
+    now.getDate() === date.getDate();
+
+  if (isSameDay) {
+    return new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
   }).format(date);
 };
 
@@ -355,6 +576,9 @@ const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "hostnam
 };
 
 const getMessageTone = (senderType: string) => {
+  if (senderType === "event") {
+    return "event";
+  }
   if (senderType === "system") {
     return "system";
   }
@@ -378,7 +602,7 @@ const QuickCreateMenu = () => {
             label: (
               <span className="quick-create-menu-label">
                 <StartChatMenuIcon />
-                <span>发起聊天</span>
+                <span>发起群聊</span>
               </span>
             ),
           },
@@ -387,7 +611,7 @@ const QuickCreateMenu = () => {
             label: (
               <span className="quick-create-menu-label">
                 <AddFriendMenuIcon />
-                <span>添加朋友</span>
+                <span>添加伙伴</span>
               </span>
             ),
           },
@@ -395,7 +619,7 @@ const QuickCreateMenu = () => {
         onClick: ({ key, domEvent }) => {
           domEvent.stopPropagation();
           if (key === "start-chat") {
-            navigate("/chats");
+            navigate("/chats?create=chat");
             return;
           }
           if (key === "add-friend") {
@@ -437,7 +661,7 @@ const ConversationList = ({
               <div className="conversation-copy">
                 <Flex justify="space-between" align="center" gap={12}>
                   <Typography.Text strong>{chat.name}</Typography.Text>
-                  <Typography.Text type="secondary">{chat.message_count > 0 ? "刚刚" : ""}</Typography.Text>
+                  <Typography.Text type="secondary">{formatConversationTime(chat.last_message_at)}</Typography.Text>
                 </Flex>
                 <Typography.Text type="secondary" className="conversation-preview">
                   {getChatPreview(chat)}
@@ -508,7 +732,7 @@ const DirectoryLayout = ({
                     }))
                   }
                 >
-                  <span className={`directory-section-caret ${collapsed ? "collapsed" : ""}`}>⌄</span>
+                  <span className={`directory-section-caret ${collapsed ? "collapsed" : ""}`}>▾</span>
                   <Typography.Text className="directory-section-title">{section.title}</Typography.Text>
                 </button>
                 {!collapsed ? (
@@ -554,13 +778,59 @@ const MessageBubble = ({
   senderType,
   content,
   createdAt,
+  readReceipt,
 }: {
   senderName: string;
   senderType: string;
   content: string;
   createdAt: string;
+  readReceipt?: {
+    read_count: number;
+    unread_count: number;
+    total_count: number;
+    read_by: Array<{ persona_id: string; name: string; status: string }>;
+    unread_by: Array<{ persona_id: string; name: string; status: string }>;
+  };
 }) => {
   const tone = getMessageTone(senderType);
+  if (tone === "event") {
+    return (
+      <div className="message-row event">
+        <div className="message-event-badge">
+          <Typography.Text type="secondary">{content}</Typography.Text>
+        </div>
+      </div>
+    );
+  }
+  const showReadReceipt = senderType === "user" && readReceipt && readReceipt.total_count > 0;
+  const readReceiptPanel = readReceipt ? (
+    <div className="message-read-panel">
+      <div className="message-read-column">
+        <Typography.Text strong>{readReceipt.read_count} 已读</Typography.Text>
+        {readReceipt.read_by.length > 0 ? (
+          readReceipt.read_by.map((member) => (
+            <div key={`read-${member.persona_id}`} className="message-read-member">
+              {member.name}
+            </div>
+          ))
+        ) : (
+          <div className="message-read-empty">暂无</div>
+        )}
+      </div>
+      <div className="message-read-column">
+        <Typography.Text strong>{readReceipt.unread_count} 未读</Typography.Text>
+        {readReceipt.unread_by.length > 0 ? (
+          readReceipt.unread_by.map((member) => (
+            <div key={`unread-${member.persona_id}`} className="message-read-member">
+              {member.name}
+            </div>
+          ))
+        ) : (
+          <div className="message-read-empty">暂无</div>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className={`message-row ${tone}`}>
@@ -572,7 +842,22 @@ const MessageBubble = ({
             {formatMessageTime(createdAt)}
           </Typography.Text>
         </Flex>
-        <div className={`message-bubble ${tone}`}>{content}</div>
+        <div className="message-bubble-wrap">
+          <div className={`message-bubble ${tone}`}>{content}</div>
+          {showReadReceipt ? (
+            <div className="message-read-anchor">
+              <Popover placement="leftBottom" content={readReceiptPanel} trigger="click" overlayClassName="message-read-popover">
+                <button
+                  type="button"
+                  className="message-read-badge"
+                  aria-label="查看已读状态"
+                >
+                  <span className="message-read-dot" />
+                </button>
+              </Popover>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -583,6 +868,11 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   const activeChatId = forcedChatId ?? chatId;
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingMuted, setPendingMuted] = useState<boolean | null>(null);
+  const [muting, setMuting] = useState(false);
+  const messageStreamRef = useRef<HTMLDivElement | null>(null);
+  const { message } = AntApp.useApp();
+  const queryClient = useQueryClient();
   const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
   const { data: snapshot, isLoading } = useQuery({
     queryKey: ["chat", activeChatId],
@@ -590,19 +880,71 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     enabled: Boolean(activeChatId),
   });
 
+  useEffect(() => {
+    const container = messageStreamRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  }, [activeChatId, snapshot?.messages.length]);
+
+  useEffect(() => {
+    setPendingMuted(null);
+    setMuting(false);
+  }, [activeChatId]);
+
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || sending || !activeChatId) {
+    if (!content || sending || !activeChatId || (snapshot?.mode === "group" && effectiveMuted)) {
       return;
     }
     setSending(true);
     try {
       await api.sendMessage(activeChatId, content);
       setDraft("");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "发送消息失败");
     } finally {
       setSending(false);
     }
   };
+
+  const toggleMute = async () => {
+    if (!activeChatId || !snapshot || snapshot.mode !== "group") {
+      return;
+    }
+    const nextMuted = !effectiveMuted;
+    setPendingMuted(nextMuted);
+    setMuting(true);
+    try {
+      const nextSnapshot = await api.toggleChatMute(activeChatId, nextMuted);
+      queryClient.setQueryData(["chat", activeChatId], nextSnapshot);
+      queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
+        (previous ?? []).map((chat) =>
+          chat.chat_id === activeChatId
+            ? {
+                ...chat,
+                muted: nextMuted,
+                message_count: nextSnapshot.messages.length,
+                last_message_at:
+                  nextSnapshot.messages.length > 0
+                    ? nextSnapshot.messages[nextSnapshot.messages.length - 1]?.created_at
+                    : (chat.last_message_at ?? null),
+              }
+            : chat,
+        ),
+      );
+      message.success(nextMuted ? "已开启全体禁言" : "已关闭全体禁言");
+    } catch (error) {
+      setPendingMuted((current) => (current === nextMuted ? null : current));
+      message.error(error instanceof Error ? error.message : "更新群聊状态失败");
+    } finally {
+      setMuting(false);
+    }
+  };
+
+  const effectiveMuted = pendingMuted ?? Boolean(snapshot?.muted);
+  const muteLocked = snapshot?.mode === "group" && effectiveMuted;
 
   if (isLoading) {
     return (
@@ -618,7 +960,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
         <ConversationList chats={chats} selectedChatId="" />
         <div className="chat-pane empty-pane">
           <div className="empty-state-panel">
-          <Empty description="还没有聊天室" />
+            <Empty description="还没有聊天室" />
           </div>
         </div>
       </div>
@@ -648,17 +990,13 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
             <Typography.Title level={4} style={{ margin: 0 }}>
               {snapshot.name}
             </Typography.Title>
-            <Space size={10} wrap>
-              <Badge status={connected ? "success" : "default"} text={connected ? "在线" : "离线"} />
-              <Typography.Text type="secondary">{lastNotice}</Typography.Text>
-            </Space>
           </div>
           <Space>
-            <Button type="text">···</Button>
+            <Button type="text">查看详情</Button>
           </Space>
         </header>
 
-        <div className="message-stream">
+        <div ref={messageStreamRef} className="message-stream">
           {snapshot.messages.map((message) => (
             <MessageBubble
               key={message.message_id}
@@ -666,24 +1004,35 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               senderType={message.sender_type}
               content={message.content}
               createdAt={message.created_at}
+              readReceipt={message.read_receipt}
             />
           ))}
         </div>
 
         <footer className="composer-panel">
           <div className="composer-toolbar">
-            <Button type="text">☺</Button>
-            <Button type="text">@</Button>
-            <Button type="text">□</Button>
-            <Button type="text">✂</Button>
-            <Button type="text">⌄</Button>
-            <Button type="text">◉</Button>
+            {snapshot.mode === "group" ? (
+              <Tooltip title="全体禁言">
+                <Button
+                  className={`composer-mute ${effectiveMuted ? "active" : ""}`}
+                  type="text"
+                  aria-label="全体禁言"
+                  aria-pressed={effectiveMuted}
+                  disabled={muting}
+                  onClick={() => void toggleMute()}
+                >
+                  <MuteChatIcon />
+                </Button>
+              </Tooltip>
+            ) : null}
           </div>
           <Input.TextArea
             autoSize={{ minRows: 4, maxRows: 7 }}
             bordered={false}
-            placeholder="输入消息，后续这里会接真实发送能力"
+            placeholder={muteLocked ? "当前群聊已开启全体禁言" : "输入消息，后续这里会接真实发送能力"}
             value={draft}
+            disabled={muteLocked}
+
             onChange={(event) => setDraft(event.target.value)}
             onPressEnter={(event) => {
               if (!event.shiftKey) {
@@ -692,10 +1041,9 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               }
             }}
           />
-          <Flex justify="space-between" align="center">
-            <Typography.Text type="secondary">点名模式</Typography.Text>
-            <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending}>
-              发送(S)
+          <Flex justify="flex-end" align="center">
+            <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending} disabled={muteLocked}>
+              发送
             </Button>
           </Flex>
         </footer>
@@ -711,9 +1059,9 @@ const SetupPage = () => {
   return (
     <section className="panel-page">
       <div className="panel-card">
-        <Typography.Title level={3}>配置向导</Typography.Title>
+        <Typography.Title level={3}>开始配置</Typography.Title>
         <Typography.Paragraph>
-          先在受信环境里启动本地 agent，完成服务端配对后，再确认节点和身份已经准备好，随后进入群聊房间。
+          在这里完成节点、工作目录和智能体的基础配置。配置完成后即可进入群聊主界面，开始第一轮协作讨论。
         </Typography.Paragraph>
         <List
           dataSource={[
@@ -749,7 +1097,6 @@ const FriendWizard = ({
     name: "",
     node_id: "",
     workspace_dir: "",
-    role_summary: "",
     system_prompt: "",
     agent_key: agentOptions[0].key,
     agent_label: agentOptions[0].label,
@@ -765,7 +1112,6 @@ const FriendWizard = ({
         name: "",
         node_id: "",
         workspace_dir: "",
-        role_summary: "",
         system_prompt: "",
         agent_key: agentOptions[0].key,
         agent_label: agentOptions[0].label,
@@ -794,14 +1140,13 @@ const FriendWizard = ({
         ...draft,
         name: draft.name.trim(),
         workspace_dir: draft.workspace_dir.trim(),
-        role_summary: draft.system_prompt.trim(),
         system_prompt: draft.system_prompt.trim(),
         agent_label: selectedAgent.label,
       });
-      message.success(`已创建朋友「${persona.name}」`);
+      message.success(`已创建智能体 ${persona.name}`);
       onCreated(persona);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "创建失败");
+      message.error(error instanceof Error ? error.message : "创建智能体失败");
     } finally {
       setSaving(false);
     }
@@ -833,7 +1178,7 @@ const FriendWizard = ({
     } catch (error) {
       setWorkspaceNotice({
         ok: false,
-        text: error instanceof Error ? error.message : "目录校验失败",
+        text: error instanceof Error ? error.message : "创建失败",
       });
     } finally {
       setValidatingWorkspace(false);
@@ -843,17 +1188,17 @@ const FriendWizard = ({
   return (
     <Modal open={open} onCancel={() => !saving && onClose()} footer={null} centered width={640} title="添加朋友" destroyOnHidden>
       <div className="friend-wizard">
-        <Steps current={step} size="small" items={[{ title: "基本信息" }, { title: "工作目录" }, { title: "基础设定" }, { title: "底层工具" }]} />
+        <Steps current={step} size="small" items={[{ title: "选择节点" }, { title: "工作目录" }, { title: "角色设定" }, { title: "底层工具" }]} />
         <div className="friend-wizard-panel">
           {step === 0 ? (
             <div className="wizard-field-stack">
               <Input
-                placeholder="名称，例如：爱因斯坦"
+                placeholder="输入智能体名称，例如：代码助手"
                 value={draft.name}
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
               />
               <Select
-                placeholder="选择一个已接收节点"
+                placeholder="选择要部署该智能体的节点"
                 value={draft.node_id || undefined}
                 onChange={(value) => {
                   setWorkspaceNotice(null);
@@ -863,7 +1208,7 @@ const FriendWizard = ({
                   value: node.node_id,
                   label: `${getNodeDisplayName(node)} · ${node.status_label}`,
                 }))}
-                notFoundContent="还没有可用节点"
+                notFoundContent="暂无可选节点"
               />
             </div>
           ) : null}
@@ -882,31 +1227,23 @@ const FriendWizard = ({
                   <Button
                     onClick={() => {
                       setWorkspaceNotice(null);
-                      setDraft((current) => ({ ...current, workspace_dir: selectedNode.work_dir ?? "" }));
-                    }}
-                  >
-                    使用节点目录
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      setWorkspaceNotice(null);
                       setDraft((current) => ({
                         ...current,
                         workspace_dir: joinWorkspacePath(selectedNode.work_dir ?? "", draft.name),
                       }));
                     }}
                   >
-                    在节点目录下新建同名目录
+                    使用节点默认目录
                   </Button>
                 </div>
               ) : null}
               {selectedNode?.work_dir ? (
                 <Typography.Text type="secondary" className="wizard-path-hint">
-                  节点默认目录：{selectedNode.work_dir}
+                  {`工作目录将创建在节点目录 ${selectedNode.work_dir}`}
                 </Typography.Text>
               ) : null}
               <Typography.Text type="secondary" className="wizard-path-hint">
-                继续前会检查这个目录是否可写，且必须是未创建目录或空目录。
+                工作目录用于存放该智能体的仓库或任务文件，建议选择节点可持久访问的位置。
               </Typography.Text>
               {workspaceNotice ? (
                 <div className={`wizard-path-notice ${workspaceNotice.ok ? "ok" : "error"}`}>{workspaceNotice.text}</div>
@@ -916,16 +1253,11 @@ const FriendWizard = ({
           {step === 2 ? (
             <div className="wizard-field-stack">
               <Input.TextArea
-                autoSize={{ minRows: 4, maxRows: 8 }}
-                placeholder="基础设定，例如：你是一位严谨的科学家，回答时重视事实、推导和清晰表达。"
+                className="wizard-textarea-fill"
+                autoSize={{ minRows: 10, maxRows: 16 }}
+                placeholder="输入系统提示词，描述这个智能体的职责、风格、边界和输出要求"
                 value={draft.system_prompt}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    system_prompt: event.target.value,
-                    role_summary: event.target.value.trim() || current.role_summary,
-                  }))
-                }
+                onChange={(event) => setDraft((current) => ({ ...current, system_prompt: event.target.value }))}
               />
             </div>
           ) : null}
@@ -968,6 +1300,8 @@ type DirectoryEntry =
 const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const { message } = AntApp.useApp();
+  const navigate = useNavigate();
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
   const [pendingNodeId, setPendingNodeId] = useState<string | null>(null);
@@ -1059,7 +1393,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   const deleteNode = async (node: NodeSummary) => {
     Modal.confirm({
       title: "删除节点",
-      content: `确认删除节点 ${getNodeDisplayName(node)}？`,
+      content: `确认删除节点 ${getNodeDisplayName(node)} 吗？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -1074,6 +1408,35 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         }
       },
     });
+  };
+
+  const deletePersona = async (persona: PersonaSummary) => {
+    Modal.confirm({
+      title: "删除智能体",
+      content: `确认删除智能体 ${persona.name} 吗？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        await api.deletePersona(persona.persona_id);
+        queryClient.setQueryData(
+          ["personas"],
+          (previous: PersonaSummary[] | undefined) =>
+            (previous ?? []).filter((entry) => entry.persona_id !== persona.persona_id),
+        );
+        setSelectedEntryId((current) => (current === `agent:${persona.persona_id}` ? null : current));
+        message.success(`已删除智能体 ${persona.name}`);
+      },
+    });
+  };
+
+  const startChatWithPersona = async (persona: PersonaSummary) => {
+    const chat = await api.createChat([persona.persona_id]);
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
+      const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
+      return [chat, ...others];
+    });
+    navigate(getChatPath(chat.chat_id));
   };
 
   const closeCreateDialog = () => {
@@ -1145,13 +1508,26 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
             );
           }
           return (
-            <>
-              <div className="directory-avatar agent">{entry.name.slice(0, 1)}</div>
-              <div className="directory-copy">
-                <Typography.Text strong>{entry.name}</Typography.Text>
-                <Typography.Text type="secondary">{entry.role_summary}</Typography.Text>
+            <Dropdown
+              trigger={["contextMenu"]}
+              menu={{
+                items: [{ key: "delete", label: "删除智能体", danger: true }],
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
+                  if (key === "delete") {
+                    void deletePersona(entry);
+                  }
+                },
+              }}
+            >
+              <div className="directory-node-row">
+                <div className="directory-avatar agent">{entry.name.slice(0, 1)}</div>
+                <div className="directory-copy">
+                  <Typography.Text strong>{entry.name}</Typography.Text>
+                  <Typography.Text type="secondary">{entry.system_prompt || "未设置角色设定"}</Typography.Text>
+                </div>
               </div>
-            </>
+            </Dropdown>
           );
         }}
         detail={
@@ -1172,26 +1548,22 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                       </Typography.Text>
                     </div>
                     <Typography.Text type="secondary" className="profile-subline">
-                      节点名：{getNodeName(selectedEntry)}
+                      节点名称：{getNodeName(selectedEntry)}
                     </Typography.Text>
                   </div>
                 </div>
                 <div className="profile-grid">
                   <div className="profile-row">
-                    <span className="profile-label">备注</span>
-                    <span>{selectedEntry.remark.trim() || "-"}</span>
-                  </div>
-                  <div className="profile-row">
                     <span className="profile-label">节点名</span>
                     <span>{getNodeName(selectedEntry)}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">打招呼语</span>
-                    <span>{selectedEntry.hello_message || "-"}</span>
-                  </div>
-                  <div className="profile-row">
                     <span className="profile-label">状态</span>
                     <span>{selectedEntry.status_label}</span>
+                  </div>
+                  <div className="profile-row">
+                    <span className="profile-label">打招呼语</span>
+                    <span>{selectedEntry.hello_message || "-"}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">最后在线</span>
@@ -1206,6 +1578,10 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                   <div className="profile-row">
                     <span className="profile-label">运行中任务</span>
                     <span>{selectedEntry.running_turns ?? 0}</span>
+                  </div>
+                  <div className="profile-row">
+                    <span className="profile-label">备注</span>
+                    <span>{selectedEntry.remark.trim() || "-"}</span>
                   </div>
                 </div>
                 {selectedEntry.can_accept ? (
@@ -1233,25 +1609,33 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     <span>{selectedEntry.status}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">角色说明</span>
-                    <span>{selectedEntry.role_summary}</span>
-                  </div>
-                  <div className="profile-row">
                     <span className="profile-label">运行节点</span>
                     <span>{selectedEntry.node_name || selectedEntry.node_id || "-"}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">工作目录</span>
-                    <span>{selectedEntry.workspace_dir || "-"}</span>
+                    <span className="profile-value-wrap">{selectedEntry.workspace_dir || "-"}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">详细人设</span>
-                    <span>{selectedEntry.system_prompt || "-"}</span>
+                    <span className="profile-label">角色设定</span>
+                    <span className="profile-value-wrap">{selectedEntry.system_prompt || "-"}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">模型</span>
+                    <span className="profile-label">Agent 类型</span>
                     <span>{selectedEntry.agent_label || selectedEntry.model_provider || "codex"}</span>
                   </div>
+                </div>
+                <div className="profile-actions">
+                  <Button
+                    type="primary"
+                    className="profile-action-button profile-accept-button"
+                    onClick={() => void startChatWithPersona(selectedEntry)}
+                  >
+                    发起群聊
+                  </Button>
+                  <Button className="profile-action-button profile-danger-button" onClick={() => void deletePersona(selectedEntry)}>
+                    删除智能体
+                  </Button>
                 </div>
               </div>
             )
@@ -1272,7 +1656,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
       >
         <div className="accept-dialog-body">
           <div className="accept-dialog-preview">
-            <div className="accept-dialog-symbol">{(displaySymbolDraft || (pendingNode ? getNodeDisplayName(pendingNode) : "•")).slice(0, 1)}</div>
+            <div className="accept-dialog-symbol">{(displaySymbolDraft || (pendingNode ? getNodeDisplayName(pendingNode) : "?")).slice(0, 1)}</div>
             <div>
               <Typography.Text strong>{pendingNode ? getNodeDisplayName(pendingNode) : "-"}</Typography.Text>
               <div className="accept-dialog-subtitle">{pendingNode?.node_id ?? ""}</div>
@@ -1284,7 +1668,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
           </div>
           <div className="accept-dialog-field">
             <Typography.Text type="secondary">备注</Typography.Text>
-            <Input value={remarkDraft} onChange={(event) => setRemarkDraft(event.target.value)} placeholder="给这个节点写个备注" />
+            <Input value={remarkDraft} onChange={(event) => setRemarkDraft(event.target.value)} placeholder="给这个节点写一个备注" />
           </div>
           <div className="accept-dialog-actions">
             <Button onClick={closeAcceptDialog} disabled={accepting}>
@@ -1311,7 +1695,7 @@ const RuntimePage = () => (
       <List
         dataSource={[
           "默认模型供应商：codex",
-          "默认超时：300 秒",
+          "默认超时：30 秒",
           "默认自由讨论轮数：3",
           "默认每轮人数：2",
         ]}
@@ -1323,7 +1707,11 @@ const RuntimePage = () => (
 
 const AppShell = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
   const activeChatId = useMemo(() => {
     const match = location.pathname.match(/^\/chats\/([^/]+)/);
     if (match) {
@@ -1342,6 +1730,22 @@ const AppShell = () => {
     return location.pathname;
   }, [location.pathname]);
   const pendingNodeCount = useMemo(() => getPendingNodeCount(nodes), [nodes]);
+  const openCreateChat = selectedKey === "/chats" && searchParams.get("create") === "chat";
+
+  const closeCreateChat = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleCreatedChat = (chat: ChatSummary) => {
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
+      const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
+      return [chat, ...others];
+    });
+    closeCreateChat();
+    navigate(getChatPath(chat.chat_id));
+  };
 
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
@@ -1395,6 +1799,7 @@ const AppShell = () => {
             <Route path="/friends" element={<AgentDirectoryPage defaultKind="agent" />} />
             <Route path="/settings/runtime" element={<RuntimePage />} />
           </Routes>
+          <StartChatDialog open={openCreateChat} personas={personas} onClose={closeCreateChat} onCreated={handleCreatedChat} />
         </Layout.Content>
       </Layout>
     </AntApp>

@@ -9,7 +9,7 @@ from server.app.runtime import sock
 from server.app.state import state
 from server.app.services.agents import agent_connections
 from server.app.services.events import update_node
-from server.app.services.turns import mark_turn_completed, mark_turn_started
+from server.app.services.turns import dispatch_pending_turns_for_node, mark_turn_completed, mark_turn_read, mark_turn_started
 
 
 def running_turn_count(payload: dict[str, Any]) -> int:
@@ -127,6 +127,8 @@ def agent_socket(ws: Any) -> None:
             ),
         )
 
+        dispatch_pending_turns_for_node(node_id)
+
         while True:
             message = receive_json(ws)
             message_type = message.get("type")
@@ -193,6 +195,38 @@ def agent_socket(ws: Any) -> None:
                         "worker_count": payload.get("worker_count", 0),
                     },
                 )
+                continue
+
+            if message_type == "agent.turn.read":
+                turn_id = str(payload.get("turn_id", ""))
+                if turn_id:
+                    mark_turn_read(turn_id=turn_id, node_id=node_id)
+                    turn = state.get_turn(turn_id)
+                    if turn is not None:
+                        from server.app.services.events import broadcast_chat_snapshot
+
+                        broadcast_chat_snapshot(str(turn.get("chat_id", "")))
+                update_connected_node(
+                    node_id,
+                    {
+                        "status": connection_status(node_id),
+                        "running_turns": running_turn_count(payload),
+                        "worker_count": payload.get("worker_count", running_turn_count(payload)),
+                    },
+                )
+                continue
+
+            if message_type == "agent.workspace.validated":
+                request_id = str(message.get("request_id") or "")
+                if request_id:
+                    agent_connections.resolve_workspace_validation(
+                        request_id,
+                        {
+                            "ok": bool(payload.get("ok", False)),
+                            "normalized_path": str(payload.get("normalized_path", "")).strip(),
+                            "message": str(payload.get("message", "")).strip(),
+                        },
+                    )
                 continue
 
             send_json(

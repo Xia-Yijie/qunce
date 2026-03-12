@@ -64,6 +64,9 @@ type PersonaSummary = {
   agent_key: string;
   agent_label: string;
   model_provider: string;
+  avatar_symbol?: string;
+  avatar_bg_color?: string;
+  avatar_text_color?: string;
 };
 
 type CreatePersonaPayload = {
@@ -73,6 +76,9 @@ type CreatePersonaPayload = {
   system_prompt: string;
   agent_key: string;
   agent_label: string;
+  avatar_symbol: string;
+  avatar_bg_color: string;
+  avatar_text_color: string;
 };
 
 type WorkspaceValidation = {
@@ -132,13 +138,25 @@ const agentOptions = [
   { key: "codex", label: "codex" },
 ];
 
+const DEFAULT_PERSONA_AVATAR_BG = "#d9e6f8";
+const DEFAULT_PERSONA_AVATAR_TEXT = "#31547e";
+
+const getPersonaAvatarConfig = (persona: Pick<PersonaSummary, "name" | "avatar_symbol" | "avatar_bg_color" | "avatar_text_color">) => ({
+  symbol: (persona.avatar_symbol || persona.name || "?").trim().slice(0, 1) || "?",
+  backgroundColor: persona.avatar_bg_color || DEFAULT_PERSONA_AVATAR_BG,
+  color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
+});
+
 const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
-  createChat: (personaIds: string[]) =>
-    fetchJson<ChatSummary>("/api/chat-start", {
+  createChat: (payload: { personaIds: string[]; name?: string }) =>
+    fetchJson<ChatSummary>("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona_ids: personaIds }),
+      body: JSON.stringify({
+        persona_ids: payload.personaIds,
+        name: payload.name,
+      }),
     }),
   nodes: () => fetchJson<NodeSummary[]>("/api/nodes"),
   acceptNode: (nodeId: string, payload: { display_symbol: string; remark: string }) =>
@@ -339,7 +357,7 @@ const StartChatDialog = ({
     }
     setCreating(true);
     try {
-      const chat = await api.createChat(selectedIds);
+      const chat = await api.createChat({ personaIds: selectedIds });
       onCreated(chat);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "发起聊天失败");
@@ -380,7 +398,7 @@ const StartChatDialog = ({
                     onClick={() => togglePersona(persona.persona_id)}
                   >
                     <Checkbox checked={checked} />
-                    <div className="directory-avatar agent">{persona.name.slice(0, 1)}</div>
+                    <PersonaAvatar persona={persona} className="directory-avatar agent" />
                     <div className="directory-copy">
                       <Typography.Text strong>{persona.name}</Typography.Text>
                       <Typography.Text type="secondary">{persona.system_prompt || "未设置角色设定"}</Typography.Text>
@@ -587,6 +605,21 @@ const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "hostnam
     return remark;
   }
   return getNodeName(node);
+};
+
+const PersonaAvatar = ({
+  persona,
+  className,
+}: {
+  persona: Pick<PersonaSummary, "name" | "avatar_symbol" | "avatar_bg_color" | "avatar_text_color">;
+  className: string;
+}) => {
+  const avatar = getPersonaAvatarConfig(persona);
+  return (
+    <div className={className} style={{ background: avatar.backgroundColor, color: avatar.color }}>
+      {avatar.symbol}
+    </div>
+  );
 };
 
 const getMessageTone = (senderType: string) => {
@@ -851,22 +884,22 @@ const MessageBubble = ({
       </div>
     </div>
   ) : null;
-  const avatar = <div className={`message-avatar ${tone}`}>{senderName.slice(0, 1)}</div>;
+  const avatar =
+    senderType === "agent" && persona ? (
+      <PersonaAvatar persona={persona} className={`message-avatar ${tone}`} />
+    ) : (
+      <div className={`message-avatar ${tone}`}>{senderName.slice(0, 1)}</div>
+    );
   const agentInfoPanel =
     senderType === "agent" && persona ? (
       <div className="agent-card-popover">
         <div className="agent-card-head">
-          <div className="agent-card-avatar">{persona.name.slice(0, 1)}</div>
+          <PersonaAvatar persona={persona} className="agent-card-avatar" />
           <div className="agent-card-copy">
             <Typography.Text strong>{persona.name}</Typography.Text>
-            <Typography.Text type="secondary">智能体 ID：{persona.persona_id}</Typography.Text>
           </div>
         </div>
         <div className="agent-card-grid">
-          <div className="agent-card-row">
-            <span className="agent-card-label">状态</span>
-            <span>{persona.status}</span>
-          </div>
           <div className="agent-card-row">
             <span className="agent-card-label">运行节点</span>
             <span>{persona.node_name || persona.node_id || "-"}</span>
@@ -924,7 +957,7 @@ const MessageBubble = ({
             {formatMessageTime(createdAt)}
           </Typography.Text>
         </Flex>
-        <div className="message-bubble-wrap">
+        <div className={`message-bubble-wrap ${showReadReceipt ? "with-read-receipt" : ""}`}>
           <div className={`message-bubble ${tone}`}>{content}</div>
           {showReadReceipt ? (
             <div className="message-read-anchor">
@@ -984,7 +1017,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
 
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || sending || !activeChatId || (snapshot?.mode === "group" && effectiveMuted)) {
+    if (!content || sending || !activeChatId) {
       return;
     }
     setSending(true);
@@ -1033,7 +1066,6 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   };
 
   const effectiveMuted = pendingMuted ?? Boolean(snapshot?.muted);
-  const muteLocked = snapshot?.mode === "group" && effectiveMuted;
 
   if (isLoading) {
     return (
@@ -1169,9 +1201,8 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               id="chat-composer"
               autoSize={{ minRows: 4, maxRows: 7 }}
               bordered={false}
-              placeholder={muteLocked ? "当前群聊已开启全体禁言" : "输入消息，后续这里会接真实发送能力"}
+              placeholder={effectiveMuted ? "输入消息，当前仅你自己可发言" : "输入消息，后续这里会接真实发送能力"}
               value={draft}
-              disabled={muteLocked}
               onChange={(event) => setDraft(event.target.value)}
               onPressEnter={(event) => {
                 if (!event.shiftKey) {
@@ -1181,7 +1212,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
               }}
             />
             <Flex justify="flex-end" align="center">
-              <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending} disabled={muteLocked}>
+              <Button className="send-button" type="default" onClick={() => void sendMessage()} loading={sending}>
                 发送
               </Button>
             </Flex>
@@ -1269,6 +1300,9 @@ const FriendWizard = ({
     system_prompt: "",
     agent_key: agentOptions[0].key,
     agent_label: agentOptions[0].label,
+    avatar_symbol: "",
+    avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
+    avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
   });
 
   useEffect(() => {
@@ -1284,6 +1318,9 @@ const FriendWizard = ({
         system_prompt: "",
         agent_key: agentOptions[0].key,
         agent_label: agentOptions[0].label,
+        avatar_symbol: "",
+        avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
+        avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
       });
     }
   }, [open]);
@@ -1311,6 +1348,7 @@ const FriendWizard = ({
         workspace_dir: draft.workspace_dir.trim(),
         system_prompt: draft.system_prompt.trim(),
         agent_label: selectedAgent.label,
+        avatar_symbol: (draft.avatar_symbol || draft.name || "?").trim().slice(0, 1),
       });
       message.success(`已创建智能体 ${persona.name}`);
       onCreated(persona);
@@ -1357,7 +1395,7 @@ const FriendWizard = ({
   return (
     <Modal open={open} onCancel={() => !saving && onClose()} footer={null} centered width={640} title="添加朋友" destroyOnHidden>
       <div className="friend-wizard">
-        <Steps current={step} size="small" items={[{ title: "选择节点" }, { title: "工作目录" }, { title: "角色设定" }, { title: "底层工具" }]} />
+        <Steps current={step} size="small" items={[{ title: "基本设定" }, { title: "工作目录" }, { title: "角色设定" }, { title: "底层工具" }]} />
         <div className="friend-wizard-panel">
           {step === 0 ? (
             <div className="wizard-field-stack">
@@ -1379,6 +1417,44 @@ const FriendWizard = ({
                 }))}
                 notFoundContent="暂无可选节点"
               />
+              <div className="wizard-avatar-config">
+                <div className="wizard-avatar-preview-card">
+                  <PersonaAvatar
+                    persona={{
+                      name: draft.name || "智",
+                      avatar_symbol: draft.avatar_symbol,
+                      avatar_bg_color: draft.avatar_bg_color,
+                      avatar_text_color: draft.avatar_text_color,
+                    }}
+                    className="wizard-avatar-preview"
+                  />
+                  <Typography.Text type="secondary">头像预览</Typography.Text>
+                </div>
+                <div className="wizard-avatar-fields">
+                  <Input
+                    maxLength={1}
+                    value={draft.avatar_symbol}
+                    placeholder="头像单字"
+                    onChange={(event) => setDraft((current) => ({ ...current, avatar_symbol: event.target.value.slice(0, 1) }))}
+                  />
+                  <label className="wizard-color-field">
+                    <span>底色</span>
+                    <input
+                      type="color"
+                      value={draft.avatar_bg_color}
+                      onChange={(event) => setDraft((current) => ({ ...current, avatar_bg_color: event.target.value }))}
+                    />
+                  </label>
+                  <label className="wizard-color-field">
+                    <span>字色</span>
+                    <input
+                      type="color"
+                      value={draft.avatar_text_color}
+                      onChange={(event) => setDraft((current) => ({ ...current, avatar_text_color: event.target.value }))}
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
           ) : null}
           {step === 1 ? (
@@ -1600,7 +1676,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   };
 
   const startChatWithPersona = async (persona: PersonaSummary) => {
-    const chat = await api.createChat([persona.persona_id]);
+    const chat = await api.createChat({ personaIds: [persona.persona_id] });
     queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
       const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
       return [chat, ...others];
@@ -1690,7 +1766,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
               }}
             >
               <div className="directory-node-row">
-                <div className="directory-avatar agent">{entry.name.slice(0, 1)}</div>
+                <PersonaAvatar persona={entry} className="directory-avatar agent" />
                 <div className="directory-copy">
                   <Typography.Text strong>{entry.name}</Typography.Text>
                   <Typography.Text type="secondary">{entry.system_prompt || "未设置角色设定"}</Typography.Text>
@@ -1764,7 +1840,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
             ) : (
               <div className="profile-card">
                 <div className="profile-header">
-                  <div className="profile-avatar agent">{selectedEntry.name.slice(0, 1)}</div>
+                  <PersonaAvatar persona={selectedEntry} className="profile-avatar agent" />
                   <div className="profile-headline">
                     <Typography.Title level={3} style={{ margin: 0 }}>
                       {selectedEntry.name}
@@ -1773,10 +1849,6 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                   </div>
                 </div>
                 <div className="profile-grid">
-                  <div className="profile-row">
-                    <span className="profile-label">状态</span>
-                    <span>{selectedEntry.status}</span>
-                  </div>
                   <div className="profile-row">
                     <span className="profile-label">运行节点</span>
                     <span>{selectedEntry.node_name || selectedEntry.node_id || "-"}</span>

@@ -144,6 +144,9 @@ def create_persona() -> Any:
     system_prompt = str(payload.get("system_prompt", "")).strip()
     agent_key = str(payload.get("agent_key", "")).strip()
     agent_label = str(payload.get("agent_label", "")).strip()
+    avatar_symbol = str(payload.get("avatar_symbol", "")).strip()[:1]
+    avatar_bg_color = str(payload.get("avatar_bg_color", "")).strip()
+    avatar_text_color = str(payload.get("avatar_text_color", "")).strip()
 
     if not name:
         abort(400, "persona_name_required")
@@ -182,6 +185,9 @@ def create_persona() -> Any:
             "agent_key": agent_key,
             "agent_label": agent_label or agent_key,
             "model_provider": "codex",
+            "avatar_symbol": avatar_symbol or name[:1],
+            "avatar_bg_color": avatar_bg_color or "#d9e6f8",
+            "avatar_text_color": avatar_text_color or "#31547e",
         }
     )
     return jsonify(persona_summary_payload(persona)), 201

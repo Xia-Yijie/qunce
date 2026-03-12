@@ -11,8 +11,6 @@ def create_user_turn(*, chat_id: str, content: str, sender_name: str = "你") ->
     chat = state.chat_snapshot(chat_id)
     if chat is None:
         raise ValueError("chat_not_found")
-    if chat.get("mode") == "group" and bool(chat.get("muted", False)):
-        raise PermissionError("chat_muted")
 
     snapshot = add_chat_message(
         chat_id,

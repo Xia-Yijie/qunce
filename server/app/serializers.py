@@ -91,6 +91,9 @@ def persona_summary_payload(persona: dict[str, Any]) -> dict[str, Any]:
         "agent_key": persona.get("agent_key", "codex-general"),
         "agent_label": persona.get("agent_label", "codex"),
         "model_provider": persona.get("model_provider", "codex"),
+        "avatar_symbol": persona.get("avatar_symbol", ""),
+        "avatar_bg_color": persona.get("avatar_bg_color", ""),
+        "avatar_text_color": persona.get("avatar_text_color", ""),
     }
 
 

@@ -11,8 +11,10 @@ console/vite.config.js
 console/vite.config.d.ts
 
 # go
+bin/
 agent/bin/
 agent/agentd
+cmd/qunce/embedded-dist/
 
 # python
 **/__pycache__/

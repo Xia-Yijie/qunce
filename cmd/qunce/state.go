@@ -95,6 +95,8 @@ func (s *state) upsertNode(nodeID string, payload map[string]interface{}) *nodeR
 	current.Name = mapString(payload["name"], current.Name)
 	current.Hostname = mapString(payload["hostname"], current.Hostname)
 	current.DisplaySymbol = mapString(payload["display_symbol"], current.DisplaySymbol)
+	current.AvatarBGColor = mapString(payload["avatar_bg_color"], current.AvatarBGColor)
+	current.AvatarTextColor = mapString(payload["avatar_text_color"], current.AvatarTextColor)
 	current.Remark = mapString(payload["remark"], current.Remark)
 	current.Status = mapString(payload["status"], current.Status)
 	current.WorkDir = mapString(payload["work_dir"], current.WorkDir)
@@ -132,6 +134,8 @@ func (s *state) updateNode(nodeID string, payload map[string]interface{}) *nodeR
 	clone.Name = mapString(payload["name"], clone.Name)
 	clone.Hostname = mapString(payload["hostname"], clone.Hostname)
 	clone.DisplaySymbol = mapString(payload["display_symbol"], clone.DisplaySymbol)
+	clone.AvatarBGColor = mapString(payload["avatar_bg_color"], clone.AvatarBGColor)
+	clone.AvatarTextColor = mapString(payload["avatar_text_color"], clone.AvatarTextColor)
 	clone.Remark = mapString(payload["remark"], clone.Remark)
 	clone.Status = mapString(payload["status"], clone.Status)
 	clone.WorkDir = mapString(payload["work_dir"], clone.WorkDir)
@@ -179,6 +183,12 @@ func (s *state) applyNodeUpdateLocked(nodeID string, payload *nodeRecord, prefer
 		if payload.DisplaySymbol != "" {
 			current.DisplaySymbol = payload.DisplaySymbol
 		}
+		if payload.AvatarBGColor != "" {
+			current.AvatarBGColor = payload.AvatarBGColor
+		}
+		if payload.AvatarTextColor != "" {
+			current.AvatarTextColor = payload.AvatarTextColor
+		}
 		if payload.Remark != "" {
 			current.Remark = payload.Remark
 		}
@@ -212,6 +222,12 @@ func (s *state) applyNodeUpdateLocked(nodeID string, payload *nodeRecord, prefer
 		}
 		if current.DisplaySymbol == "" {
 			current.DisplaySymbol = payload.DisplaySymbol
+		}
+		if current.AvatarBGColor == "" {
+			current.AvatarBGColor = payload.AvatarBGColor
+		}
+		if current.AvatarTextColor == "" {
+			current.AvatarTextColor = payload.AvatarTextColor
 		}
 		if current.Remark == "" {
 			current.Remark = payload.Remark
@@ -315,6 +331,47 @@ func (s *state) setPersona(record *personaRecord) *personaRecord {
 	s.data.Personas[record.PersonaID] = clonePersona(record)
 	_ = s.persistLocked()
 	return clonePersona(record)
+}
+
+func (s *state) updatePersona(personaID string, payload map[string]interface{}) *personaRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	persona := s.data.Personas[personaID]
+	if persona == nil {
+		return nil
+	}
+	if name := mapString(payload["name"], persona.Name); name != "" {
+		persona.Name = name
+	}
+	if symbol := mapString(payload["avatar_symbol"], persona.AvatarSymbol); symbol != "" {
+		persona.AvatarSymbol = symbol
+	}
+	if bg := mapString(payload["avatar_bg_color"], persona.AvatarBGColor); bg != "" {
+		persona.AvatarBGColor = bg
+	}
+	if text := mapString(payload["avatar_text_color"], persona.AvatarTextColor); text != "" {
+		persona.AvatarTextColor = text
+	}
+	persona.UpdatedAt = nowRFC3339()
+	_ = s.persistLocked()
+	return clonePersona(persona)
+}
+
+func (s *state) refreshPersonaNodeNames(nodeID, nodeName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updated := false
+	for _, persona := range s.data.Personas {
+		if persona == nil || persona.NodeID != nodeID {
+			continue
+		}
+		persona.NodeName = nodeName
+		persona.UpdatedAt = nowRFC3339()
+		updated = true
+	}
+	if updated {
+		_ = s.persistLocked()
+	}
 }
 
 func (s *state) addPersona(record *personaRecord) (*personaRecord, error) {

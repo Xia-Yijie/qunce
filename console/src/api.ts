@@ -7,6 +7,7 @@ import type {
   NodeSummary,
   PersonaSummary,
   RemoveChatMemberResponse,
+  UpdatePersonaPayload,
   WorkspaceValidation,
 } from "./types";
 
@@ -41,7 +42,19 @@ export const api = {
       }),
     }),
   nodes: () => fetchJson<NodeSummary[]>("/api/nodes"),
-  acceptNode: (nodeId: string, payload: { display_symbol: string; remark: string }) =>
+  acceptNode: (
+    nodeId: string,
+    payload: { display_symbol: string; remark: string; avatar_bg_color: string; avatar_text_color: string },
+  ) =>
+    fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateNode: (
+    nodeId: string,
+    payload: { display_symbol: string; remark: string; avatar_bg_color: string; avatar_text_color: string },
+  ) =>
     fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -110,6 +123,12 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }),
+  updatePersona: (payload: UpdatePersonaPayload) =>
+    fetchJson<PersonaSummary>("/api/personas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _action: "update", ...payload }),
     }),
   deletePersona: (personaId: string) =>
     fetchJson<{ ok: boolean }>("/api/personas", {

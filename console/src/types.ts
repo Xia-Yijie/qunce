@@ -18,11 +18,16 @@ export type NodeSummary = {
   name: string;
   hostname: string;
   display_symbol: string;
+  avatar_bg_color?: string;
+  avatar_text_color?: string;
   remark: string;
   status: string;
   status_label: string;
   approved: boolean;
   can_accept: boolean;
+  can_delete?: boolean;
+  delete_reason?: string;
+  is_embedded?: boolean;
   hello_message: string;
   work_dir?: string;
   platform?: string;
@@ -55,6 +60,14 @@ export type CreatePersonaPayload = {
   system_prompt: string;
   agent_key: string;
   agent_label: string;
+  avatar_symbol: string;
+  avatar_bg_color: string;
+  avatar_text_color: string;
+};
+
+export type UpdatePersonaPayload = {
+  persona_id: string;
+  name: string;
   avatar_symbol: string;
   avatar_bg_color: string;
   avatar_text_color: string;

@@ -82,21 +82,23 @@ type chatMemberMuteResult struct {
 }
 
 type nodeRecord struct {
-	NodeID        string `json:"node_id"`
-	Name          string `json:"name"`
-	Hostname      string `json:"hostname"`
-	DisplaySymbol string `json:"display_symbol"`
-	Remark        string `json:"remark"`
-	Status        string `json:"status"`
-	Approved      bool   `json:"approved"`
-	LastSeenAt    string `json:"last_seen_at"`
-	RunningTurns  int    `json:"running_turns"`
-	WorkerCount   int    `json:"worker_count"`
-	WorkDir       string `json:"work_dir"`
-	Platform      string `json:"platform"`
-	Arch          string `json:"arch"`
-	HelloMessage  string `json:"hello_message"`
-	AgentVersion  string `json:"agent_version"`
+	NodeID          string `json:"node_id"`
+	Name            string `json:"name"`
+	Hostname        string `json:"hostname"`
+	DisplaySymbol   string `json:"display_symbol"`
+	AvatarBGColor   string `json:"avatar_bg_color"`
+	AvatarTextColor string `json:"avatar_text_color"`
+	Remark          string `json:"remark"`
+	Status          string `json:"status"`
+	Approved        bool   `json:"approved"`
+	LastSeenAt      string `json:"last_seen_at"`
+	RunningTurns    int    `json:"running_turns"`
+	WorkerCount     int    `json:"worker_count"`
+	WorkDir         string `json:"work_dir"`
+	Platform        string `json:"platform"`
+	Arch            string `json:"arch"`
+	HelloMessage    string `json:"hello_message"`
+	AgentVersion    string `json:"agent_version"`
 }
 
 type personaRecord struct {

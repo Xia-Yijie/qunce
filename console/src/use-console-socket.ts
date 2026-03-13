@@ -45,11 +45,31 @@ export const useConsoleSocket = (chatIds: string[]) => {
         const data = payload.data as ChatSnapshot;
         queryClient.setQueryData(["chat", data.chat_id], data);
         queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-          sortChats(
-            (previous ?? []).map((chat) =>
-              chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat,
-            ),
-          ),
+          {
+            const chats = previous ?? [];
+            const existing = chats.find((chat) => chat.chat_id === data.chat_id);
+            if (existing) {
+              return sortChats(
+                chats.map((chat) => (chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat)),
+              );
+            }
+
+            const appended: ChatSummary = {
+              chat_id: data.chat_id,
+              name: data.name,
+              mode: data.mode,
+              muted: data.muted,
+              pinned: data.pinned,
+              dnd: data.dnd,
+              marked_unread: data.marked_unread,
+              unread_count: data.unread_count ?? 0,
+              member_count: data.members.length,
+              message_count: data.messages.length,
+              last_message_at: data.messages.length > 0 ? data.messages[data.messages.length - 1]?.created_at ?? null : null,
+              last_message_preview: data.messages.length > 0 ? data.messages[data.messages.length - 1]?.content ?? null : null,
+            };
+            return sortChats([appended, ...chats]);
+          },
         );
       }
     });

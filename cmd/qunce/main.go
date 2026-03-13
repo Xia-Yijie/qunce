@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -62,7 +63,7 @@ func runServer() error {
 	mux := http.NewServeMux()
 	registerRoutes(mux, ctx)
 	registerAgentSocket(mux, st, agentRegistry, consoleRegistry, cfg)
-	registerConsoleSocket(mux, consoleRegistry)
+	registerConsoleSocket(mux, consoleRegistry, st)
 	registerStaticRoutes(mux)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -81,15 +82,33 @@ func runServer() error {
 		errCh <- server.ListenAndServe()
 	}()
 
-	shutdownCh := make(chan os.Signal, 1)
-	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	serverCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runEmbeddedNode(serverCtx, cfg)
+	}()
+
 	select {
-	case sig := <-shutdownCh:
-		log.Printf("shutdown by signal: %v", sig)
+	case err := <-errCh:
+		stop()
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		wg.Wait()
+		return nil
+	case <-serverCtx.Done():
+		log.Printf("shutdown requested")
 		ctxTimeout, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return server.Shutdown(ctxTimeout)
-	case err := <-errCh:
-		return err
+		err := server.Shutdown(ctxTimeout)
+		wg.Wait()
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
 	}
 }

@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import {
   App as AntApp,
   Badge,
@@ -26,15 +27,20 @@ import { api } from "./api";
 import {
   DEFAULT_PERSONA_AVATAR_BG,
   DEFAULT_PERSONA_AVATAR_TEXT,
+  DEFAULT_NODE_AVATAR_BG,
+  DEFAULT_NODE_AVATAR_TEXT,
   agentOptions,
   applyChatSummaryFromSnapshot,
   formatMessageTime,
   formatReadableTime,
   getChatPath,
+  getNodeAvatarConfig,
   getNodeDisplayName,
+  getNodeMetaText,
   getNodeName,
   getPendingNodeCount,
   getPersonaAvatarConfig,
+  isEmbeddedNode,
   joinWorkspacePath,
   renderMutedName,
   sortChats,
@@ -49,6 +55,7 @@ import type {
   CreatePersonaPayload,
   NodeSummary,
   PersonaSummary,
+  UpdatePersonaPayload,
 } from "./types";
 import { useConsoleSocket } from "./use-console-socket";
 
@@ -443,6 +450,21 @@ const PersonaAvatar = ({
   );
 };
 
+const NodeAvatar = ({
+  node,
+  className,
+}: {
+  node: Pick<NodeSummary, "display_symbol" | "avatar_bg_color" | "avatar_text_color" | "remark" | "name" | "hostname">;
+  className: string;
+}) => {
+  const avatar = getNodeAvatarConfig(node);
+  return (
+    <div className={className} style={{ background: avatar.backgroundColor, color: avatar.color }}>
+      {avatar.symbol}
+    </div>
+  );
+};
+
 const PersonaInfoCard = ({ persona }: { persona: PersonaSummary }) => (
   <div className="agent-card-popover">
     <div className="agent-card-head">
@@ -555,8 +577,8 @@ const DirectoryLayout = ({
   sections: Array<{ key: string; title: string; defaultCollapsed?: boolean; items: Array<{ id: string }> }>;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  renderRow: (id: string) => React.ReactNode;
-  detail: React.ReactNode;
+  renderRow: (id: string) => ReactNode;
+  detail: ReactNode;
   searchValue: string;
   onSearchChange: (value: string) => void;
   searchStorageKey: string;
@@ -1328,6 +1350,66 @@ const SetupPage = () => {
   );
 };
 
+type IdentityDraft = {
+  name: string;
+  avatar_symbol: string;
+  avatar_bg_color: string;
+  avatar_text_color: string;
+};
+
+const IdentityStyleEditor = <T extends IdentityDraft>({
+  draft,
+  setDraft,
+  preview,
+  namePlaceholder,
+}: {
+  draft: T;
+  setDraft: Dispatch<SetStateAction<T>>;
+  preview: ReactNode;
+  namePlaceholder: string;
+}) => (
+  <div className="wizard-field-stack">
+    <Input
+      placeholder={namePlaceholder}
+      value={draft.name}
+      onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+    />
+    <div className="wizard-avatar-config">
+      <div className="wizard-avatar-preview-card">
+        {preview}
+        <Typography.Text type="secondary">头像预览</Typography.Text>
+      </div>
+      <div className="wizard-avatar-fields">
+        <Input
+          maxLength={1}
+          value={draft.avatar_symbol}
+          placeholder="头像单字"
+          onChange={(event) => setDraft((current) => ({ ...current, avatar_symbol: event.target.value.slice(0, 1) }))}
+        />
+        <label className="wizard-color-field">
+          <span>底色</span>
+          <input
+            type="color"
+            value={draft.avatar_bg_color}
+            onChange={(event) => setDraft((current) => ({ ...current, avatar_bg_color: event.target.value }))}
+          />
+        </label>
+        <label className="wizard-color-field">
+          <span>字色</span>
+          <input
+            type="color"
+            value={draft.avatar_text_color}
+            onChange={(event) => setDraft((current) => ({ ...current, avatar_text_color: event.target.value }))}
+          />
+        </label>
+      </div>
+    </div>
+  </div>
+);
+
+const applyDraftUpdate = <T,>(current: T, next: SetStateAction<T>): T =>
+  typeof next === "function" ? (next as (value: T) => T)(current) : next;
+
 const FriendWizard = ({
   open,
   nodes,
@@ -1451,11 +1533,6 @@ const FriendWizard = ({
         <div className="friend-wizard-panel">
           {step === 0 ? (
             <div className="wizard-field-stack">
-              <Input
-                placeholder="输入智能体名称，例如：代码助手"
-                value={draft.name}
-                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-              />
               <Select
                 placeholder="选择要部署该智能体的节点"
                 value={draft.node_id || undefined}
@@ -1469,8 +1546,11 @@ const FriendWizard = ({
                 }))}
                 notFoundContent="暂无可选节点"
               />
-              <div className="wizard-avatar-config">
-                <div className="wizard-avatar-preview-card">
+              <IdentityStyleEditor
+                draft={draft}
+                setDraft={setDraft}
+                namePlaceholder="输入智能体名称，例如：代码助手"
+                preview={
                   <PersonaAvatar
                     persona={{
                       name: draft.name || "智",
@@ -1480,33 +1560,8 @@ const FriendWizard = ({
                     }}
                     className="wizard-avatar-preview"
                   />
-                  <Typography.Text type="secondary">头像预览</Typography.Text>
-                </div>
-                <div className="wizard-avatar-fields">
-                  <Input
-                    maxLength={1}
-                    value={draft.avatar_symbol}
-                    placeholder="头像单字"
-                    onChange={(event) => setDraft((current) => ({ ...current, avatar_symbol: event.target.value.slice(0, 1) }))}
-                  />
-                  <label className="wizard-color-field">
-                    <span>底色</span>
-                    <input
-                      type="color"
-                      value={draft.avatar_bg_color}
-                      onChange={(event) => setDraft((current) => ({ ...current, avatar_bg_color: event.target.value }))}
-                    />
-                  </label>
-                  <label className="wizard-color-field">
-                    <span>字色</span>
-                    <input
-                      type="color"
-                      value={draft.avatar_text_color}
-                      onChange={(event) => setDraft((current) => ({ ...current, avatar_text_color: event.target.value }))}
-                    />
-                  </label>
-                </div>
-              </div>
+                }
+              />
             </div>
           ) : null}
           {step === 1 ? (
@@ -1602,9 +1657,21 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
   const [pendingNodeId, setPendingNodeId] = useState<string | null>(null);
+  const [nodeDialogMode, setNodeDialogMode] = useState<"accept" | "edit">("accept");
   const [accepting, setAccepting] = useState(false);
   const [displaySymbolDraft, setDisplaySymbolDraft] = useState("");
   const [remarkDraft, setRemarkDraft] = useState("");
+  const [nodeAvatarBGDraft, setNodeAvatarBGDraft] = useState(DEFAULT_NODE_AVATAR_BG);
+  const [nodeAvatarTextDraft, setNodeAvatarTextDraft] = useState(DEFAULT_NODE_AVATAR_TEXT);
+  const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null);
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaDraft, setPersonaDraft] = useState<UpdatePersonaPayload>({
+    persona_id: "",
+    name: "",
+    avatar_symbol: "",
+    avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
+    avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
+  });
   const [searchKeyword, setSearchKeyword] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const entries = useMemo<DirectoryEntry[]>(
@@ -1638,7 +1705,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
       .map((node) => ({
         key: `node:${node.node_id}`,
         title: getNodeDisplayName(node),
-        subtitle: node.hello_message || getNodeName(node),
+        subtitle: isEmbeddedNode(node) ? "伴生节点" : getNodeMetaText(node),
         onSelect: () => setSelectedEntryId(`node:${node.node_id}`),
       }));
     return [...agentResults, ...nodeResults];
@@ -1677,12 +1744,44 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     () => nodes.find((node) => node.node_id === pendingNodeId) ?? null,
     [nodes, pendingNodeId],
   );
+  const nodeIdentityDraft = useMemo<IdentityDraft>(
+    () => ({
+      name: remarkDraft,
+      avatar_symbol: displaySymbolDraft,
+      avatar_bg_color: nodeAvatarBGDraft,
+      avatar_text_color: nodeAvatarTextDraft,
+    }),
+    [displaySymbolDraft, nodeAvatarBGDraft, nodeAvatarTextDraft, remarkDraft],
+  );
   const openCreate = searchParams.get("create") === "friend";
 
   const openAcceptDialog = (node: NodeSummary) => {
+    setNodeDialogMode("accept");
     setPendingNodeId(node.node_id);
     setDisplaySymbolDraft(node.display_symbol || getNodeDisplayName(node).slice(0, 1));
     setRemarkDraft(node.remark || "");
+    setNodeAvatarBGDraft(node.avatar_bg_color || DEFAULT_NODE_AVATAR_BG);
+    setNodeAvatarTextDraft(node.avatar_text_color || DEFAULT_NODE_AVATAR_TEXT);
+  };
+
+  const openEditNodeDialog = (node: NodeSummary) => {
+    setNodeDialogMode("edit");
+    setPendingNodeId(node.node_id);
+    setDisplaySymbolDraft(node.display_symbol || getNodeDisplayName(node).slice(0, 1));
+    setRemarkDraft(getNodeDisplayName(node));
+    setNodeAvatarBGDraft(node.avatar_bg_color || DEFAULT_NODE_AVATAR_BG);
+    setNodeAvatarTextDraft(node.avatar_text_color || DEFAULT_NODE_AVATAR_TEXT);
+  };
+
+  const openEditPersonaDialog = (persona: PersonaSummary) => {
+    setEditingPersonaId(persona.persona_id);
+    setPersonaDraft({
+      persona_id: persona.persona_id,
+      name: persona.name,
+      avatar_symbol: persona.avatar_symbol || "",
+      avatar_bg_color: persona.avatar_bg_color || DEFAULT_PERSONA_AVATAR_BG,
+      avatar_text_color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
+    });
   };
 
   const closeAcceptDialog = () => {
@@ -1692,19 +1791,83 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     setPendingNodeId(null);
     setDisplaySymbolDraft("");
     setRemarkDraft("");
+    setNodeAvatarBGDraft(DEFAULT_NODE_AVATAR_BG);
+    setNodeAvatarTextDraft(DEFAULT_NODE_AVATAR_TEXT);
+  };
+
+  const setNodeIdentityDraft: Dispatch<SetStateAction<IdentityDraft>> = (next) => {
+    const resolved = applyDraftUpdate(nodeIdentityDraft, next);
+    setRemarkDraft(resolved.name);
+    setDisplaySymbolDraft(resolved.avatar_symbol);
+    setNodeAvatarBGDraft(resolved.avatar_bg_color);
+    setNodeAvatarTextDraft(resolved.avatar_text_color);
+  };
+
+  const closeEditPersonaDialog = () => {
+    if (personaSaving) {
+      return;
+    }
+    setEditingPersonaId(null);
+    setPersonaDraft({
+      persona_id: "",
+      name: "",
+      avatar_symbol: "",
+      avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
+      avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
+    });
   };
 
   const acceptNode = async (nodeId: string) => {
     setAccepting(true);
-    const acceptedNode = await api.acceptNode(nodeId, {
-      display_symbol: displaySymbolDraft.trim().slice(0, 1),
-      remark: remarkDraft.trim(),
-    });
-    queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
-      (previous ?? []).map((node) => (node.node_id === acceptedNode.node_id ? acceptedNode : node)),
-    );
-    setAccepting(false);
-    closeAcceptDialog();
+    try {
+      const acceptedNode = await api.acceptNode(nodeId, {
+        display_symbol: displaySymbolDraft.trim().slice(0, 1),
+        remark: remarkDraft.trim(),
+        avatar_bg_color: nodeAvatarBGDraft,
+        avatar_text_color: nodeAvatarTextDraft,
+      });
+      queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
+        (previous ?? []).map((node) => (node.node_id === acceptedNode.node_id ? acceptedNode : node)),
+      );
+      queryClient.setQueryData(["personas"], (previous: PersonaSummary[] | undefined) =>
+        (previous ?? []).map((persona) =>
+          persona.node_id === acceptedNode.node_id
+            ? { ...persona, node_name: getNodeDisplayName(acceptedNode) }
+            : persona,
+        ),
+      );
+      closeAcceptDialog();
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  const updateNodeProfile = async (nodeId: string) => {
+    setAccepting(true);
+    try {
+      const updatedNode = await api.updateNode(nodeId, {
+        display_symbol: displaySymbolDraft.trim().slice(0, 1),
+        remark: remarkDraft.trim(),
+        avatar_bg_color: nodeAvatarBGDraft,
+        avatar_text_color: nodeAvatarTextDraft,
+      });
+      queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
+        (previous ?? []).map((node) => (node.node_id === updatedNode.node_id ? updatedNode : node)),
+      );
+      queryClient.setQueryData(["personas"], (previous: PersonaSummary[] | undefined) =>
+        (previous ?? []).map((persona) =>
+          persona.node_id === updatedNode.node_id
+            ? { ...persona, node_name: getNodeDisplayName(updatedNode) }
+            : persona,
+        ),
+      );
+      message.success("已更新节点信息");
+      closeAcceptDialog();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新节点失败");
+    } finally {
+      setAccepting(false);
+    }
   };
 
   const rejectNode = async (nodeId: string) => {
@@ -1726,12 +1889,16 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
       cancelText: "取消",
       centered: true,
       onOk: async () => {
-        await api.rejectNode(node.node_id);
-        queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
-          (previous ?? []).filter((item) => item.node_id !== node.node_id),
-        );
-        if (selectedEntry?.kind === "node" && selectedEntry.node_id === node.node_id) {
-          setSelectedEntryId(null);
+        try {
+          await api.rejectNode(node.node_id);
+          queryClient.setQueryData(["nodes"], (previous: NodeSummary[] | undefined) =>
+            (previous ?? []).filter((item) => item.node_id !== node.node_id),
+          );
+          if (selectedEntry?.kind === "node" && selectedEntry.node_id === node.node_id) {
+            setSelectedEntryId(null);
+          }
+        } catch (error) {
+          message.warning(error instanceof Error ? error.message : "该节点不能删除");
         }
       },
     });
@@ -1766,6 +1933,32 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     navigate(getChatPath(chat.chat_id));
   };
 
+  const updatePersonaProfile = async () => {
+    if (!editingPersonaId || !personaDraft.name.trim()) {
+      return;
+    }
+    setPersonaSaving(true);
+    try {
+      const updatedPersona = await api.updatePersona({
+        ...personaDraft,
+        persona_id: editingPersonaId,
+        name: personaDraft.name.trim(),
+        avatar_symbol: (personaDraft.avatar_symbol || personaDraft.name || "?").trim().slice(0, 1),
+      });
+      queryClient.setQueryData(["personas"], (previous: PersonaSummary[] | undefined) =>
+        (previous ?? []).map((persona) =>
+          persona.persona_id === updatedPersona.persona_id ? updatedPersona : persona,
+        ),
+      );
+      message.success(`已更新智能体 ${updatedPersona.name}`);
+      closeEditPersonaDialog();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新智能体失败");
+    } finally {
+      setPersonaSaving(false);
+    }
+  };
+
   const closeCreateDialog = () => {
     const next = new URLSearchParams(searchParams);
     next.delete("create");
@@ -1798,9 +1991,15 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
               <Dropdown
                 trigger={["contextMenu"]}
                 menu={{
-                  items: [{ key: "delete", label: "删除节点", danger: true }],
+                  items: [
+                    { key: "rename", label: "重命名" },
+                    { key: "delete", label: "删除节点", danger: true },
+                  ],
                   onClick: ({ key, domEvent }) => {
                     domEvent.stopPropagation();
+                    if (key === "rename") {
+                      openEditNodeDialog(entry);
+                    }
                     if (key === "delete") {
                       void deleteNode(entry);
                     }
@@ -1808,7 +2007,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                 }}
               >
                 <div className="directory-node-row">
-                <div className="directory-avatar">{(entry.display_symbol || getNodeDisplayName(entry)).slice(0, 1)}</div>
+                <NodeAvatar node={entry} className="directory-avatar" />
                 <div className="directory-copy">
                   <div className="directory-title-row">
                     <Typography.Text strong className="directory-name-text">
@@ -1832,7 +2031,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     )}
                   </div>
                   <Typography.Text type="secondary" className="directory-meta-line">
-                    {entry.hello_message || "等待节点发来打招呼用语"}
+                    {getNodeMetaText(entry)}
                   </Typography.Text>
                 </div>
                 </div>
@@ -1840,12 +2039,18 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
             );
           }
           return (
-            <Dropdown
-              trigger={["contextMenu"]}
-              menu={{
-                items: [{ key: "delete", label: "删除智能体", danger: true }],
+              <Dropdown
+                trigger={["contextMenu"]}
+                menu={{
+                items: [
+                  { key: "rename", label: "重命名" },
+                  { key: "delete", label: "删除智能体", danger: true },
+                ],
                 onClick: ({ key, domEvent }) => {
                   domEvent.stopPropagation();
+                  if (key === "rename") {
+                    openEditPersonaDialog(entry);
+                  }
                   if (key === "delete") {
                     void deletePersona(entry);
                   }
@@ -1867,9 +2072,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
             selectedEntry.kind === "node" ? (
               <div className="profile-card">
                 <div className="profile-header">
-                  <div className="profile-avatar">
-                    {(selectedEntry.display_symbol || getNodeDisplayName(selectedEntry)).slice(0, 1)}
-                  </div>
+                  <NodeAvatar node={selectedEntry} className="profile-avatar" />
                   <div className="profile-headline">
                     <div className="profile-title-row">
                       <Typography.Title level={3} style={{ margin: 0 }}>
@@ -1880,7 +2083,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                       </Typography.Text>
                     </div>
                     <Typography.Text type="secondary" className="profile-subline">
-                      节点名称：{getNodeName(selectedEntry)}
+                      节点 ID：{selectedEntry.node_id}
                     </Typography.Text>
                   </div>
                 </div>
@@ -1894,8 +2097,8 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     <span>{selectedEntry.status_label}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">打招呼语</span>
-                    <span>{selectedEntry.hello_message || "-"}</span>
+                    <span className="profile-label">{isEmbeddedNode(selectedEntry) ? "节点类型" : "打招呼语"}</span>
+                    <span>{isEmbeddedNode(selectedEntry) ? "伴生节点" : selectedEntry.hello_message || "-"}</span>
                   </div>
                   <div className="profile-row">
                     <span className="profile-label">最后在线</span>
@@ -1922,7 +2125,13 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                       接收
                     </Button>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="profile-actions">
+                    <Button className="profile-action-button" onClick={() => openEditNodeDialog(selectedEntry)}>
+                      重命名
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="profile-card">
@@ -1954,6 +2163,9 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                   </div>
                 </div>
                 <div className="profile-actions">
+                  <Button className="profile-action-button" onClick={() => openEditPersonaDialog(selectedEntry)}>
+                    重命名
+                  </Button>
                   <Button
                     type="primary"
                     className="profile-action-button profile-accept-button"
@@ -1979,34 +2191,122 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         onCancel={closeAcceptDialog}
         footer={null}
         centered
-        width={380}
-        title="接收节点"
+        width={560}
+        title={nodeDialogMode === "accept" ? "接收节点" : "编辑节点"}
+        destroyOnHidden
       >
-        <div className="accept-dialog-body">
-          <div className="accept-dialog-preview">
-            <div className="accept-dialog-symbol">{(displaySymbolDraft || (pendingNode ? getNodeDisplayName(pendingNode) : "?")).slice(0, 1)}</div>
-            <div>
-              <Typography.Text strong>{pendingNode ? getNodeDisplayName(pendingNode) : "-"}</Typography.Text>
-              <div className="accept-dialog-subtitle">{pendingNode?.node_id ?? ""}</div>
+        {nodeDialogMode === "accept" ? (
+          <div className="accept-dialog-body">
+            <div className="accept-dialog-preview">
+              <NodeAvatar
+                node={{
+                  display_symbol: displaySymbolDraft,
+                  avatar_bg_color: nodeAvatarBGDraft,
+                  avatar_text_color: nodeAvatarTextDraft,
+                  remark: remarkDraft,
+                  name: pendingNode?.name || "",
+                  hostname: pendingNode?.hostname || "",
+                }}
+                className="accept-dialog-symbol"
+              />
+              <div>
+                <Typography.Text strong>{remarkDraft.trim() || (pendingNode ? getNodeDisplayName(pendingNode) : "-")}</Typography.Text>
+                <div className="accept-dialog-subtitle">{pendingNode?.node_id ?? ""}</div>
+              </div>
+            </div>
+            <div className="accept-dialog-field">
+              <Typography.Text type="secondary">名称</Typography.Text>
+              <Input value={remarkDraft} onChange={(event) => setRemarkDraft(event.target.value)} placeholder="节点显示名称" />
+            </div>
+            <div className="accept-dialog-field">
+              <Typography.Text type="secondary">符号</Typography.Text>
+              <Input maxLength={1} value={displaySymbolDraft} onChange={(event) => setDisplaySymbolDraft(event.target.value.slice(0, 1))} />
+            </div>
+            <div className="wizard-avatar-fields">
+              <label className="wizard-color-field">
+                <span>底色</span>
+                <input type="color" value={nodeAvatarBGDraft} onChange={(event) => setNodeAvatarBGDraft(event.target.value)} />
+              </label>
+              <label className="wizard-color-field">
+                <span>字色</span>
+                <input type="color" value={nodeAvatarTextDraft} onChange={(event) => setNodeAvatarTextDraft(event.target.value)} />
+              </label>
+            </div>
+            <div className="accept-dialog-actions">
+              <Button onClick={closeAcceptDialog} disabled={accepting}>
+                取消
+              </Button>
+              <Button danger onClick={() => pendingNode && void rejectNode(pendingNode.node_id)} loading={accepting}>
+                拒绝
+              </Button>
+              <Button type="primary" onClick={() => pendingNode && void acceptNode(pendingNode.node_id)} loading={accepting}>
+                确定
+              </Button>
             </div>
           </div>
-          <div className="accept-dialog-field">
-            <Typography.Text type="secondary">符号</Typography.Text>
-            <Input maxLength={1} value={displaySymbolDraft} onChange={(event) => setDisplaySymbolDraft(event.target.value.slice(0, 1))} />
+        ) : (
+          <div className="friend-wizard">
+            <IdentityStyleEditor
+              draft={nodeIdentityDraft}
+              setDraft={setNodeIdentityDraft}
+              namePlaceholder="输入节点名称"
+              preview={
+                <NodeAvatar
+                  node={{
+                    display_symbol: nodeIdentityDraft.avatar_symbol,
+                    avatar_bg_color: nodeIdentityDraft.avatar_bg_color,
+                    avatar_text_color: nodeIdentityDraft.avatar_text_color,
+                    remark: nodeIdentityDraft.name,
+                    name: pendingNode?.name || "",
+                    hostname: pendingNode?.hostname || "",
+                  }}
+                  className="wizard-avatar-preview"
+                />
+              }
+            />
+            <div className="friend-wizard-footer">
+              <Button onClick={closeAcceptDialog} disabled={accepting}>
+                取消
+              </Button>
+              <Button type="primary" onClick={() => pendingNode && void updateNodeProfile(pendingNode.node_id)} loading={accepting}>
+                保存
+              </Button>
+            </div>
           </div>
-          <div className="accept-dialog-field">
-            <Typography.Text type="secondary">备注</Typography.Text>
-            <Input value={remarkDraft} onChange={(event) => setRemarkDraft(event.target.value)} placeholder="给这个节点写一个备注" />
-          </div>
-          <div className="accept-dialog-actions">
-            <Button onClick={closeAcceptDialog} disabled={accepting}>
+        )}
+      </Modal>
+      <Modal
+        open={editingPersonaId !== null}
+        onCancel={closeEditPersonaDialog}
+        footer={null}
+        centered
+        width={560}
+        title="编辑智能体"
+        destroyOnHidden
+      >
+        <div className="friend-wizard">
+          <IdentityStyleEditor
+            draft={personaDraft}
+            setDraft={setPersonaDraft}
+            namePlaceholder="输入智能体名称"
+            preview={
+              <PersonaAvatar
+                persona={{
+                  name: personaDraft.name || "智",
+                  avatar_symbol: personaDraft.avatar_symbol,
+                  avatar_bg_color: personaDraft.avatar_bg_color,
+                  avatar_text_color: personaDraft.avatar_text_color,
+                }}
+                className="wizard-avatar-preview"
+              />
+            }
+          />
+          <div className="friend-wizard-footer">
+            <Button onClick={closeEditPersonaDialog} disabled={personaSaving}>
               取消
             </Button>
-            <Button danger onClick={() => pendingNode && void rejectNode(pendingNode.node_id)} loading={accepting}>
-              拒绝
-            </Button>
-            <Button type="primary" onClick={() => pendingNode && void acceptNode(pendingNode.node_id)} loading={accepting}>
-              确定
+            <Button type="primary" onClick={() => void updatePersonaProfile()} loading={personaSaving}>
+              保存
             </Button>
           </div>
         </div>
@@ -2150,4 +2450,3 @@ const AppShell = () => {
 };
 
 export const App = AppShell;
-

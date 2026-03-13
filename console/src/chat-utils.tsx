@@ -4,6 +4,8 @@ export const agentOptions = [{ key: "codex", label: "codex" }];
 
 export const DEFAULT_PERSONA_AVATAR_BG = "#d9e6f8";
 export const DEFAULT_PERSONA_AVATAR_TEXT = "#31547e";
+export const DEFAULT_NODE_AVATAR_BG = "#dde7df";
+export const DEFAULT_NODE_AVATAR_TEXT = "#335248";
 
 export const getPersonaAvatarConfig = (
   persona: Pick<PersonaSummary, "name" | "avatar_symbol" | "avatar_bg_color" | "avatar_text_color">,
@@ -11,6 +13,14 @@ export const getPersonaAvatarConfig = (
   symbol: (persona.avatar_symbol || persona.name || "?").trim().slice(0, 1) || "?",
   backgroundColor: persona.avatar_bg_color || DEFAULT_PERSONA_AVATAR_BG,
   color: persona.avatar_text_color || DEFAULT_PERSONA_AVATAR_TEXT,
+});
+
+export const getNodeAvatarConfig = (
+  node: Pick<NodeSummary, "display_symbol" | "avatar_bg_color" | "avatar_text_color" | "remark" | "name" | "hostname">,
+) => ({
+  symbol: (node.display_symbol || getNodeDisplayName(node) || "?").trim().slice(0, 1) || "?",
+  backgroundColor: node.avatar_bg_color || DEFAULT_NODE_AVATAR_BG,
+  color: node.avatar_text_color || DEFAULT_NODE_AVATAR_TEXT,
 });
 
 export const renderMutedName = (name: string, muted?: boolean) => (
@@ -144,4 +154,13 @@ export const getNodeDisplayName = (node: Pick<NodeSummary, "remark" | "name" | "
     return remark;
   }
   return getNodeName(node);
+};
+
+export const isEmbeddedNode = (node: Pick<NodeSummary, "is_embedded">) => Boolean(node.is_embedded);
+
+export const getNodeMetaText = (node: Pick<NodeSummary, "is_embedded" | "hello_message">) => {
+  if (isEmbeddedNode(node)) {
+    return "伴生节点";
+  }
+  return node.hello_message?.trim() || "等待节点发来打招呼语";
 };

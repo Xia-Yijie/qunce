@@ -176,44 +176,51 @@ func personaSummaryPayload(persona *personaRecord) map[string]interface{} {
 	}
 }
 
-func nodeSummaryPayload(node *nodeRecord) map[string]interface{} {
+func nodeSummaryPayload(node *nodeRecord, cfg appConfig, personas []*personaRecord) map[string]interface{} {
 	if node == nil {
 		return map[string]interface{}{}
 	}
 	statusLabel := map[string]string{
-		"pending":      "pending",
-		"online":       "online",
-		"offline":      "offline",
-		"disconnected": "disconnected",
+		"pending":      "待接收",
+		"online":       "在线",
+		"offline":      "离线",
+		"disconnected": "已断开",
 	}[node.Status]
 	if statusLabel == "" {
 		statusLabel = node.Status
 	}
+	isEmbedded := isEmbeddedNodeRecord(node, cfg)
+	deleteBlockReason := nodeDeleteBlockReason(node, cfg, personas)
 
 	return map[string]interface{}{
-		"node_id":        node.NodeID,
-		"name":           node.Name,
-		"hostname":       node.Hostname,
-		"display_symbol": node.DisplaySymbol,
-		"remark":         node.Remark,
-		"status":         node.Status,
-		"status_label":   statusLabel,
-		"approved":       node.Approved,
-		"can_accept":     !node.Approved,
-		"hello_message":  node.HelloMessage,
-		"work_dir":       node.WorkDir,
-		"platform":       node.Platform,
-		"arch":           node.Arch,
-		"last_seen_at":   node.LastSeenAt,
-		"running_turns":  node.RunningTurns,
-		"worker_count":   node.WorkerCount,
+		"node_id":           node.NodeID,
+		"name":              node.Name,
+		"hostname":          node.Hostname,
+		"display_symbol":    node.DisplaySymbol,
+		"avatar_bg_color":   node.AvatarBGColor,
+		"avatar_text_color": node.AvatarTextColor,
+		"remark":            node.Remark,
+		"status":            node.Status,
+		"status_label":      statusLabel,
+		"approved":          node.Approved,
+		"can_accept":        !node.Approved,
+		"can_delete":        deleteBlockReason == "",
+		"delete_reason":     deleteBlockReason,
+		"is_embedded":       isEmbedded,
+		"hello_message":     node.HelloMessage,
+		"work_dir":          node.WorkDir,
+		"platform":          node.Platform,
+		"arch":              node.Arch,
+		"last_seen_at":      node.LastSeenAt,
+		"running_turns":     node.RunningTurns,
+		"worker_count":      node.WorkerCount,
 	}
 }
 
-func nodeListPayload(nodes []*nodeRecord) map[string]interface{} {
+func nodeListPayload(nodes []*nodeRecord, cfg appConfig, personas []*personaRecord) map[string]interface{} {
 	payload := make([]map[string]interface{}, 0, len(nodes))
 	for _, node := range nodes {
-		payload = append(payload, nodeSummaryPayload(node))
+		payload = append(payload, nodeSummaryPayload(node, cfg, personas))
 	}
 	return map[string]interface{}{"nodes": payload}
 }

@@ -166,25 +166,59 @@ func handleAgentSocket(st *state, agents *agentRegistry, consoles *consoleRegist
 			nodeID = "node_" + strings.ReplaceAll(hostname, " ", "-")
 		}
 		existingNode := st.getNode(nodeID)
-		if existingNode == nil {
-			existingNode = &nodeRecord{}
-		}
 
 		agents.upsert(nodeID, conn)
-		st.updateNode(nodeID, map[string]interface{}{
-			"node_id":       nodeID,
-			"name":          username,
-			"hostname":      hostname,
-			"work_dir":      firstNonEmpty(toString(helloPayload["work_dir"], ""), existingNode.WorkDir),
-			"platform":      firstNonEmpty(toString(helloPayload["platform"], ""), existingNode.Platform),
-			"arch":          firstNonEmpty(toString(helloPayload["arch"], ""), existingNode.Arch),
-			"agent_version": firstNonEmpty(toString(helloPayload["agent_version"], ""), existingNode.AgentVersion),
-			"hello_message": firstNonEmpty(toString(helloPayload["hello_message"], ""), existingNode.HelloMessage),
-			"approved":      existingNode.Approved,
-			"status":        boolText(existingNode != nil && existingNode.Approved, "online", "pending"),
-			"running_turns": 0,
-			"worker_count":  0,
-		})
+		existingApproved := false
+		if existingNode != nil {
+			existingApproved = existingNode.Approved
+		}
+		if cfg.EmbeddedNodeID != "" && cfg.EmbeddedNodeID == nodeID {
+			existingApproved = true
+		}
+		existingHostname := ""
+		existingName := ""
+		existingWorkDir := ""
+		existingPlatform := ""
+		existingArch := ""
+		existingAgentVersion := ""
+		existingHelloMessage := ""
+		if existingNode != nil {
+			existingHostname = strings.TrimSpace(existingNode.Hostname)
+			existingName = strings.TrimSpace(existingNode.Name)
+			existingWorkDir = strings.TrimSpace(existingNode.WorkDir)
+			existingPlatform = strings.TrimSpace(existingNode.Platform)
+			existingArch = strings.TrimSpace(existingNode.Arch)
+			existingAgentVersion = strings.TrimSpace(existingNode.AgentVersion)
+			existingHelloMessage = strings.TrimSpace(existingNode.HelloMessage)
+		}
+		if existingName != "" && username == "" {
+			username = existingName
+		}
+		hostname = firstNonEmpty(hostname, "local-node")
+		workDir := firstNonEmpty(toString(helloPayload["work_dir"], ""), existingWorkDir)
+		platform := firstNonEmpty(toString(helloPayload["platform"], ""), existingPlatform)
+		arch := firstNonEmpty(toString(helloPayload["arch"], ""), existingArch)
+		agentVersion := firstNonEmpty(toString(helloPayload["agent_version"], ""), existingAgentVersion)
+		helloMessage := firstNonEmpty(toString(helloPayload["hello_message"], ""), existingHelloMessage)
+
+		nextNode := &nodeRecord{
+			NodeID:       nodeID,
+			Name:         firstNonEmpty(username, existingName),
+			Hostname:     firstNonEmpty(hostname, existingHostname),
+			WorkDir:      workDir,
+			Platform:     platform,
+			Arch:         arch,
+			AgentVersion: agentVersion,
+			HelloMessage: helloMessage,
+			Approved:     existingApproved,
+			Status:       boolText(existingApproved, "online", "pending"),
+			RunningTurns: 0,
+			WorkerCount:  0,
+		}
+		if nextNode.HelloMessage == "" {
+			nextNode.HelloMessage = "群策服务伴生节点"
+		}
+		st.setNode(nodeID, nextNode)
 		broadcastNodeUpdate(consoles, st)
 
 		if err := sendEnvelope(conn, buildEnvelope(
@@ -278,7 +312,9 @@ func handleAgentSocket(st *state, agents *agentRegistry, consoles *consoleRegist
 				turnID := strings.TrimSpace(toString(payload["turn_id"], ""))
 				output := strings.TrimSpace(toString(payload["output"], ""))
 				if turnID != "" && output != "" {
-					markTurnCompleted(st, turnID, nodeID, output)
+					if turn := markTurnCompleted(st, turnID, nodeID, output); turn != nil {
+						broadcastChatSnapshot(consoles, st, turn.ChatID)
+					}
 				}
 				updateNodeState()
 			case "agent.workspace.validated":

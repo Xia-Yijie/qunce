@@ -16,11 +16,11 @@ var wsConsoleUpgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-func registerConsoleSocket(mux *http.ServeMux, consoles *consoleRegistry) {
-	mux.HandleFunc("/ws/console", handleConsoleSocket(consoles))
+func registerConsoleSocket(mux *http.ServeMux, consoles *consoleRegistry, appState *state) {
+	mux.HandleFunc("/ws/console", handleConsoleSocket(consoles, appState))
 }
 
-func handleConsoleSocket(consoles *consoleRegistry) http.HandlerFunc {
+func handleConsoleSocket(consoles *consoleRegistry, appState *state) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := wsConsoleUpgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -90,9 +90,13 @@ func handleConsoleSocket(consoles *consoleRegistry) http.HandlerFunc {
 				consoles.update(subscriptionID, chatIDs, watchNode)
 			}
 
-			consoles.sendChatSnapshot(subscriptionID, raw.RequestID, nil)
+			if appState != nil {
+				consoles.sendChatSnapshot(subscriptionID, raw.RequestID, appState)
+			}
 			if watchNode {
-				consoles.sendNodeUpdate(subscriptionID, raw.RequestID, nil)
+				if appState != nil {
+					consoles.sendNodeUpdate(subscriptionID, raw.RequestID, appState)
+				}
 			}
 		}
 	}

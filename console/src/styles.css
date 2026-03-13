@@ -725,6 +725,8 @@ a {
   font-size: 14px;
   line-height: 1.6;
   box-shadow: 0 8px 20px rgba(31, 35, 41, 0.05);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-bubble.system {
@@ -760,7 +762,22 @@ a {
 }
 
 .message-row.user .message-bubble-wrap.with-read-receipt {
-  flex-direction: row-reverse;
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  overflow: visible;
+}
+
+.message-row.user .message-bubble {
+  max-width: 100%;
+  margin-left: auto;
+  display: block;
+}
+
+.message-row.user .message-read-anchor {
+  position: absolute;
+  left: -58px;
+  bottom: 0;
 }
 
 .message-read-anchor {

@@ -1,6 +1,7 @@
 package clientapp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -91,6 +93,7 @@ func loadConfig(args []string) (agentConfig, error) {
 	link := fs.String("link", "", "server host:port")
 	workspace := fs.String("workspace", "~/.qunce", "agent workspace")
 	hello := fs.String("hello", "", "greeting message")
+	nodeIDArg := fs.String("node-id", "", "agent node id")
 	if err := fs.Parse(args); err != nil {
 		return agentConfig{}, err
 	}
@@ -135,6 +138,7 @@ func loadConfig(args []string) (agentConfig, error) {
 		"你好，我想加入群策。",
 	)
 	nodeID := firstNonEmpty(
+		strings.TrimSpace(*nodeIDArg),
 		os.Getenv("QUNCE_NODE_ID"),
 		mustGetConfig(store, "node_id"),
 		generateNodeID(),
@@ -328,8 +332,18 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 		return
 	}
 
-	time.Sleep(900 * time.Millisecond)
-	output := fmt.Sprintf("收到用户的请求：%s", data.Content)
+	output, execErr := r.generateTurnReply(ctx, data)
+	if execErr != nil {
+		r.logger.Warn(
+			"failed to generate turn reply",
+			"error",
+			execErr,
+			"turn_id",
+			data.TurnID,
+			"workspace_dir",
+			data.WorkspaceDir,
+		)
+	}
 	if err := r.send(ctx, buildEnvelope("agent.turn.completed", r.cfg.NodeID, map[string]any{
 		"turn_id":          data.TurnID,
 		"output":           output,
@@ -338,6 +352,156 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 	})); err != nil {
 		r.logger.Warn("failed to send turn completed", "error", err, "turn_id", data.TurnID)
 	}
+}
+
+func (r *agentRuntime) generateTurnReply(ctx context.Context, data turnRequestData) (string, error) {
+	workspaceDir := strings.TrimSpace(data.WorkspaceDir)
+	if workspaceDir == "" {
+		workspaceDir = r.cfg.WorkDir
+	}
+	if workspaceDir == "" {
+		return "I could not reply because no workspace directory is configured.", errors.New("workspace directory is empty")
+	}
+
+	info, err := os.Stat(workspaceDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if mkErr := os.MkdirAll(workspaceDir, 0o755); mkErr != nil {
+				return fmt.Sprintf("I could not create the workspace directory: %s", workspaceDir), mkErr
+			}
+			info, err = os.Stat(workspaceDir)
+		}
+		if err != nil {
+			return fmt.Sprintf("I could not reply because the workspace is unavailable: %s", workspaceDir), err
+		}
+	}
+	if !info.IsDir() {
+		return fmt.Sprintf("I could not reply because the workspace path is not a directory: %s", workspaceDir), errors.New("workspace path is not a directory")
+	}
+
+	prompt := buildTurnPrompt(data, workspaceDir)
+	output, err := runCodexExec(ctx, workspaceDir, prompt)
+	if err != nil {
+		return fmt.Sprintf("I could not finish the reply in %s: %v", workspaceDir, err), err
+	}
+	output = strings.TrimSpace(output)
+	r.logger.Info("generated turn reply", "turn_id", data.TurnID, "output", output)
+	if output == "" {
+		return "I could not produce a reply.", errors.New("empty codex output")
+	}
+	return output, nil
+}
+
+func buildTurnPrompt(data turnRequestData, workspaceDir string) string {
+	var builder strings.Builder
+	builder.WriteString("You are replying as one participant inside a multi-agent group chat.\n")
+	builder.WriteString("Return only the final message that should be posted to the chat.\n")
+	builder.WriteString("Reply in Chinese unless the user clearly used another language.\n")
+	builder.WriteString("Do not include analysis, tool logs, markdown fences, or meta commentary.\n")
+	builder.WriteString("Do not say that you received the request.\n")
+	builder.WriteString("Do not paraphrase or repeat the user's message unless quoting is necessary.\n")
+	builder.WriteString("If the user is greeting you, greet back naturally and briefly.\n")
+	builder.WriteString("If the user asks a question, answer it directly.\n")
+	builder.WriteString("Do not modify files.\n")
+	builder.WriteString("Keep the reply concise and useful.\n\n")
+	builder.WriteString("Context:\n")
+	builder.WriteString("Persona name: ")
+	builder.WriteString(firstNonEmpty(strings.TrimSpace(data.PersonaName), strings.TrimSpace(data.PersonaID), "Agent"))
+	builder.WriteString("\n")
+	if prompt := strings.TrimSpace(data.SystemPrompt); prompt != "" {
+		builder.WriteString("System prompt:\n")
+		builder.WriteString(prompt)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("Workspace directory: ")
+	builder.WriteString(workspaceDir)
+	builder.WriteString("\n")
+	builder.WriteString("User name: ")
+	builder.WriteString(firstNonEmpty(strings.TrimSpace(data.SenderName), "user"))
+	builder.WriteString("\n")
+	builder.WriteString("User message:\n")
+	builder.WriteString(strings.TrimSpace(data.Content))
+	builder.WriteString("\n\n")
+	builder.WriteString("Now write the chat reply.\n")
+	return builder.String()
+}
+
+func runCodexExec(ctx context.Context, workspaceDir, prompt string) (string, error) {
+	outputFile, err := os.CreateTemp("", "qunce-codex-output-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("create temp output file: %w", err)
+	}
+	outputPath := outputFile.Name()
+	if closeErr := outputFile.Close(); closeErr != nil {
+		_ = os.Remove(outputPath)
+		return "", fmt.Errorf("prepare temp output file: %w", closeErr)
+	}
+	defer os.Remove(outputPath)
+
+	execCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	args := []string{
+		"exec",
+		"--skip-git-repo-check",
+		"--color", "never",
+		"-C", workspaceDir,
+		"--output-last-message", outputPath,
+		"-",
+	}
+	cmd, err := buildCodexCommand(execCtx, args...)
+	if err != nil {
+		return "", err
+	}
+	cmd.Dir = workspaceDir
+	cmd.Stdin = strings.NewReader(prompt)
+	configureChildProcess(cmd)
+
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if output, readErr := readCodexOutputFile(outputPath); readErr == nil && output != "" {
+			return output, nil
+		}
+		errText := strings.TrimSpace(stderr.String())
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("codex timed out after 2 minutes")
+		}
+		if errText == "" {
+			errText = err.Error()
+		}
+		return "", fmt.Errorf("codex exec failed: %s", errText)
+	}
+
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("read codex output: %w", err)
+	}
+	return string(raw), nil
+}
+
+func readCodexOutputFile(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+func buildCodexCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	for _, candidate := range defaultCodexCommandCandidates() {
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return exec.CommandContext(ctx, resolved, args...), nil
+		}
+	}
+
+	return nil, errors.New("codex executable not found")
+}
+
+func defaultCodexCommandCandidates() []string {
+	return []string{"codex"}
 }
 
 func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message rawEnvelope) {

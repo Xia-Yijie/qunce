@@ -6,6 +6,43 @@ import (
 	"strings"
 )
 
+func isEmbeddedNodeRecord(node *nodeRecord, cfg appConfig) bool {
+	if node == nil {
+		return false
+	}
+	if cfg.EmbeddedNodeID != "" && strings.TrimSpace(node.NodeID) == strings.TrimSpace(cfg.EmbeddedNodeID) {
+		return true
+	}
+	workDir := strings.TrimSpace(node.WorkDir)
+	return strings.HasSuffix(workDir, `\.qunce-node`) || strings.HasSuffix(workDir, `/.qunce-node`)
+}
+
+func nodeHasBoundPersonas(nodeID string, personas []*personaRecord) bool {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return false
+	}
+	for _, persona := range personas {
+		if persona == nil {
+			continue
+		}
+		if strings.TrimSpace(persona.NodeID) == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeDeleteBlockReason(node *nodeRecord, cfg appConfig, personas []*personaRecord) string {
+	if isEmbeddedNodeRecord(node, cfg) {
+		return "伴生节点不能删除"
+	}
+	if nodeHasBoundPersonas(firstNonEmpty(node.NodeID), personas) {
+		return "存在智能体的节点不能删除"
+	}
+	return ""
+}
+
 func parsePersonaIDs(raw interface{}, errorCode string) ([]string, error) {
 	rawList, ok := raw.([]interface{})
 	if !ok {

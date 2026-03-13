@@ -13,6 +13,7 @@ type appConfig struct {
 	ServerDataDir    string
 	Host             string
 	Port             int
+	EmbeddedNodeID   string
 }
 
 func loadConfig() appConfig {
@@ -23,6 +24,7 @@ func loadConfig() appConfig {
 		ServerDataDir:    expandHome(getenvOrDefault("QUNCE_SERVER_DATA_DIR", "~/.qunce")),
 		Host:             getenvOrDefault("QUNCE_SERVER_HOST", "0.0.0.0"),
 		Port:             getenvIntOrDefault("QUNCE_SERVER_PORT", 8000),
+		EmbeddedNodeID:   getenvOrDefault("QUNCE_SERVER_NODE_ID", ""),
 	}
 }
 

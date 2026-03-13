@@ -503,6 +503,34 @@ func (ctx *handlerContext) handlePersonas(w http.ResponseWriter, r *http.Request
 			return
 		}
 
+		if action == "update" {
+			personaID := strings.TrimSpace(toString(body["persona_id"], ""))
+			name := strings.TrimSpace(toString(body["name"], ""))
+			avatarSymbol := strings.TrimSpace(toString(body["avatar_symbol"], ""))
+			avatarBG := strings.TrimSpace(toString(body["avatar_bg_color"], ""))
+			avatarText := strings.TrimSpace(toString(body["avatar_text_color"], ""))
+			if personaID == "" {
+				badRequest(w, "persona_id_required")
+				return
+			}
+			if name == "" {
+				badRequest(w, "persona_name_required")
+				return
+			}
+			persona := ctx.state.updatePersona(personaID, map[string]interface{}{
+				"name":              name,
+				"avatar_symbol":     intLimit(firstNonEmpty(avatarSymbol, name[:1]), 1),
+				"avatar_bg_color":   firstNonEmpty(avatarBG, "#d9e6f8"),
+				"avatar_text_color": firstNonEmpty(avatarText, "#31547e"),
+			})
+			if persona == nil {
+				writeError(w, http.StatusNotFound, "persona_not_found")
+				return
+			}
+			writeJSON(w, http.StatusOK, personaSummaryPayload(persona))
+			return
+		}
+
 		if action == "create_chat" {
 			rawPersonaIDs := body["persona_ids"]
 			if rawPersonaIDs == nil {
@@ -637,6 +665,7 @@ func (ctx *handlerContext) handleNodes(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w)
 			return
 		}
+		personas := ctx.state.listPersonas()
 		payload := make([]map[string]interface{}, 0, len(ctx.state.listNodes()))
 		for _, node := range ctx.state.listNodes() {
 			if node.Approved {
@@ -646,7 +675,7 @@ func (ctx *handlerContext) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node.Status = "offline"
 				}
 			}
-			payload = append(payload, nodeSummaryPayload(node))
+			payload = append(payload, nodeSummaryPayload(node, ctx.cfg, personas))
 		}
 		writeJSON(w, http.StatusOK, payload)
 		return
@@ -655,8 +684,13 @@ func (ctx *handlerContext) handleNodes(w http.ResponseWriter, r *http.Request) {
 	nodeID := pathParts[2]
 	if len(pathParts) == 3 {
 		if r.Method == http.MethodDelete {
-			if ctx.state.getNode(nodeID) == nil {
+			node := ctx.state.getNode(nodeID)
+			if node == nil {
 				writeError(w, http.StatusNotFound, "node_not_found")
+				return
+			}
+			if reason := nodeDeleteBlockReason(node, ctx.cfg, ctx.state.listPersonas()); reason != "" {
+				writeError(w, http.StatusConflict, reason)
 				return
 			}
 			ctx.agents.disconnect(nodeID)
@@ -726,22 +760,27 @@ func (ctx *handlerContext) handleNodes(w http.ResponseWriter, r *http.Request) {
 		body := parseBody(r)
 		displaySymbol := firstNonEmpty(strings.TrimSpace(toString(body["display_symbol"], "")), "N")
 		remark := strings.TrimSpace(toString(body["remark"], ""))
+		avatarBG := strings.TrimSpace(toString(body["avatar_bg_color"], ""))
+		avatarText := strings.TrimSpace(toString(body["avatar_text_color"], ""))
 		status := "offline"
 		if ctx.agents.get(nodeID) != nil {
 			status = "online"
 		}
 		accepted := ctx.state.updateNode(nodeID, map[string]interface{}{
-			"approved":       true,
-			"display_symbol": displaySymbol,
-			"remark":         remark,
-			"status":         status,
+			"approved":          true,
+			"display_symbol":    displaySymbol,
+			"avatar_bg_color":   firstNonEmpty(avatarBG, "#dde7df"),
+			"avatar_text_color": firstNonEmpty(avatarText, "#335248"),
+			"remark":            remark,
+			"status":            status,
 		})
 		if accepted == nil {
 			writeError(w, http.StatusNotFound, "node_not_found")
 			return
 		}
+		ctx.state.refreshPersonaNodeNames(nodeID, firstNonEmpty(remark, accepted.Hostname, accepted.Name, nodeID))
 		broadcastNodeUpdate(ctx.consoles, ctx.state)
-		writeJSON(w, http.StatusOK, nodeSummaryPayload(accepted))
+		writeJSON(w, http.StatusOK, nodeSummaryPayload(accepted, ctx.cfg, ctx.state.listPersonas()))
 	default:
 		notFound(w)
 	}

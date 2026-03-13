@@ -228,6 +228,9 @@ func asSet(values []string) map[string]struct{} {
 }
 
 func (r *consoleRegistry) sendChatSnapshot(id int64, requestID string, appState *state) {
+	if appState == nil {
+		return
+	}
 	sub := r.get(id)
 	if sub == nil {
 		return
@@ -250,6 +253,9 @@ func (r *consoleRegistry) sendChatSnapshot(id int64, requestID string, appState 
 }
 
 func (r *consoleRegistry) sendNodeUpdate(id int64, requestID string, appState *state) {
+	if appState == nil {
+		return
+	}
 	sub := r.get(id)
 	if sub == nil {
 		return
@@ -260,7 +266,7 @@ func (r *consoleRegistry) sendNodeUpdate(id int64, requestID string, appState *s
 		"main",
 		"console",
 		"browser",
-		nodeListPayload(appState.listNodes()),
+		nodeListPayload(appState.listNodes(), appState.cfg, appState.listPersonas()),
 		requestID,
 	))
 }
@@ -283,6 +289,9 @@ func mustJSON(v interface{}) []byte {
 }
 
 func broadcastChatSnapshot(reg *consoleRegistry, appState *state, chatID string) {
+	if reg == nil || appState == nil {
+		return
+	}
 	for _, sub := range reg.snapshotAll() {
 		if _, ok := sub.chatIDs[chatID]; !ok {
 			continue
@@ -292,6 +301,9 @@ func broadcastChatSnapshot(reg *consoleRegistry, appState *state, chatID string)
 }
 
 func broadcastNodeUpdate(reg *consoleRegistry, appState *state) {
+	if reg == nil || appState == nil {
+		return
+	}
 	for _, sub := range reg.snapshotAll() {
 		if !sub.watchNode {
 			continue

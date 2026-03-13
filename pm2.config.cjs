@@ -3,9 +3,9 @@ const path = require("path");
 module.exports = {
   apps: [
     {
-      name: "qunce-server",
+      name: "qunce",
       cwd: __dirname,
-      script: path.join(__dirname, "bin", `qunce-server${process.platform === "win32" ? ".exe" : ""}`),
+      script: path.join(__dirname, "bin", `qunce${process.platform === "win32" ? ".exe" : ""}`),
       interpreter: "none",
       env: {
         QUNCE_SERVER_HOST: "0.0.0.0",

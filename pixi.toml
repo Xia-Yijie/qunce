@@ -1,6 +1,6 @@
 [workspace]
 channels = ["conda-forge"]
-name = "群策"
+name = "qunce"
 platforms = ["win-64", "linux-64", "osx-arm64"]
 version = "0.1.0"
 
@@ -9,12 +9,11 @@ pm2-install = { cmd = "pnpm install", cwd = "." }
 console-install = { cmd = "pnpm install", cwd = "console" }
 console-dev = { cmd = "pnpm dev -- --host 0.0.0.0 --port 5173", cwd = "console" }
 console-build = { cmd = "pnpm build", cwd = "console" }
-server-build = { cmd = "node -e \"const fs=require('fs'); const path=require('path'); const { spawnSync } = require('child_process'); const ext=process.platform==='win32'?'.exe':''; const src=path.join('console','dist'); const dst=path.join('cmd','qunce','embedded-dist'); fs.rmSync(dst, { recursive: true, force: true }); fs.mkdirSync(dst, { recursive: true }); if (!fs.existsSync(src)) { throw new Error('missing dist: ' + src); } fs.cpSync(src, dst, { recursive: true }); fs.mkdirSync('bin', { recursive: true }); const out=path.join('bin', 'qunce-server' + ext); const proc = spawnSync('go', ['build', '-o', out, './cmd/qunce'], { stdio: 'inherit' }); if (proc.status !== 0) { process.exit(proc.status || 1); }\"", cwd = ".", depends-on = ["console-build"] }
-server = { cmd = "pnpm exec pm2 startOrRestart pm2.config.cjs --only qunce-server", cwd = ".", depends-on = ["pm2-install", "console-install", "server-build"] }
-server-stop = { cmd = "pnpm pm2 del qunce-server", cwd = "." }
-server-status = { cmd = "pnpm exec pm2 status qunce-server", cwd = "." }
-agent-run = { cmd = "CGO_ENABLED=0 go run ./cmd/agentd --link 127.0.0.1:8000 --hello \"你好，我想加入群策。\"", cwd = "agent" }
-agent-build = { cmd = "mkdir -p ./bin && CGO_ENABLED=0 go build -o ./bin/agentd ./cmd/agentd", cwd = "agent" }
+server-build = { cmd = "node -e \"const fs=require('fs'); const path=require('path'); const { spawnSync } = require('child_process'); const ext=process.platform==='win32'?'.exe':''; const src=path.join('console','dist'); const dst=path.join('cmd','qunce','embedded-dist'); fs.rmSync(dst, { recursive: true, force: true }); fs.mkdirSync(dst, { recursive: true }); if (!fs.existsSync(src)) { throw new Error('missing dist: ' + src); } fs.cpSync(src, dst, { recursive: true }); fs.mkdirSync('bin', { recursive: true }); const out=path.join('bin', 'qunce' + ext); const proc = spawnSync('go', ['build', '-o', out, './cmd/qunce'], { stdio: 'inherit' }); if (proc.status !== 0) { process.exit(proc.status || 1); }\"", cwd = ".", depends-on = ["console-build"] }
+server = { cmd = "pnpm exec pm2 startOrRestart pm2.config.cjs --only qunce", cwd = ".", depends-on = ["pm2-install", "console-install", "server-build"] }
+client = { cmd = "bin/qunce client --link 127.0.0.1:8000 --hello \"Hi, I am qunce client.\"", cwd = "." }
+server-stop = { cmd = "pnpm pm2 del qunce", cwd = "." }
+server-status = { cmd = "pnpm exec pm2 status qunce", cwd = "." }
 
 [dependencies]
 nodejs = "22.*"

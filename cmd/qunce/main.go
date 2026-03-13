@@ -7,17 +7,48 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	clientapp "qunce/cmd/qunce/clientapp"
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := runApp(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
+func runApp() error {
+	mode, args := parseMode(os.Args[1:])
+	switch mode {
+	case "server":
+		return runServer()
+	case "client":
+		return clientapp.Run(args)
+	case "help":
+		_, _ = os.Stdout.WriteString("usage: qunce [server|client] [options]\n  qunce server   start server (default)\n  qunce client   start agent client\n")
+		return nil
+	default:
+		return fmt.Errorf("unknown mode %q, use `qunce server` or `qunce client`", mode)
+	}
+}
+
+func parseMode(raw []string) (string, []string) {
+	if len(raw) == 0 {
+		return "server", nil
+	}
+	if !strings.HasPrefix(raw[0], "-") {
+		switch raw[0] {
+		case "server", "client", "help":
+			return raw[0], raw[1:]
+		}
+	}
+	return "server", raw
+}
+
+func runServer() error {
 	cfg := loadConfig()
 	st, err := newState(cfg)
 	if err != nil {

@@ -1,21 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { applyChatSummaryFromSnapshot, sortChats } from "./chat-utils";
+import { applyChatSummaryFromSnapshot, chatSummaryFromSnapshot, sortChats } from "./chat-utils";
 import type { ChatSnapshot, ChatSummary, NodeSummary } from "./types";
 
 export const useConsoleSocket = (chatIds: string[]) => {
   const queryClient = useQueryClient();
-  const [connected, setConnected] = useState(false);
-  const [lastNotice, setLastNotice] = useState("等待连接群聊通道");
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${protocol}://${window.location.host}/ws/console`);
 
     socket.addEventListener("open", () => {
-      setConnected(true);
-      setLastNotice("群聊通道已连接");
       socket.send(
         JSON.stringify({
           v: 1,
@@ -32,60 +28,28 @@ export const useConsoleSocket = (chatIds: string[]) => {
 
     socket.addEventListener("message", (event) => {
       const payload = JSON.parse(event.data) as { type: string; data?: unknown };
-      if (payload.type === "server.notice") {
-        const data = (payload.data ?? {}) as Record<string, unknown>;
-        setLastNotice(String(data.message ?? "收到服务端通知"));
-      }
       if (payload.type === "server.node.updated") {
-        setLastNotice("节点状态已同步");
         const data = (payload.data ?? {}) as { nodes?: NodeSummary[] };
         queryClient.setQueryData(["nodes"], data.nodes ?? []);
       }
       if (payload.type === "server.chat.snapshot") {
         const data = payload.data as ChatSnapshot;
         queryClient.setQueryData(["chat", data.chat_id], data);
-        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) =>
-          {
-            const chats = previous ?? [];
-            const existing = chats.find((chat) => chat.chat_id === data.chat_id);
-            if (existing) {
-              return sortChats(
-                chats.map((chat) => (chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat)),
-              );
-            }
+        queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
+          const chats = previous ?? [];
+          const existing = chats.find((chat) => chat.chat_id === data.chat_id);
+          if (existing) {
+            return sortChats(
+              chats.map((chat) => (chat.chat_id === data.chat_id ? applyChatSummaryFromSnapshot(chat, data) : chat)),
+            );
+          }
 
-            const appended: ChatSummary = {
-              chat_id: data.chat_id,
-              name: data.name,
-              mode: data.mode,
-              muted: data.muted,
-              pinned: data.pinned,
-              dnd: data.dnd,
-              marked_unread: data.marked_unread,
-              unread_count: data.unread_count ?? 0,
-              member_count: data.members.length,
-              message_count: data.messages.length,
-              last_message_at: data.messages.length > 0 ? data.messages[data.messages.length - 1]?.created_at ?? null : null,
-              last_message_preview: data.messages.length > 0 ? data.messages[data.messages.length - 1]?.content ?? null : null,
-            };
-            return sortChats([appended, ...chats]);
-          },
-        );
+          const appended: ChatSummary = chatSummaryFromSnapshot(data);
+          return sortChats([appended, ...chats]);
+        });
       }
-    });
-
-    socket.addEventListener("close", () => {
-      setConnected(false);
-      setLastNotice("群聊通道已断开");
-    });
-
-    socket.addEventListener("error", () => {
-      setConnected(false);
-      setLastNotice("群聊通道连接失败");
     });
 
     return () => socket.close();
   }, [chatIds.join("|"), queryClient]);
-
-  return { connected, lastNotice };
 };

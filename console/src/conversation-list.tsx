@@ -3,7 +3,7 @@ import { Badge, Dropdown, Flex, List, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { Link, useNavigate } from "react-router-dom";
 
-import { formatConversationTime, getChatPath, getChatPreview } from "./chat-utils";
+import { formatConversationTime, getChatPath, getChatPreview, includesKeyword } from "./chat-utils";
 import { SearchInputDropdown } from "./search-input-dropdown";
 import type { ChatSummary } from "./types";
 
@@ -103,14 +103,10 @@ export const ConversationList = ({
   const [keyword, setKeyword] = useState("");
 
   const chatResults = useMemo(() => {
-    const query = keyword.trim().toLowerCase();
-    if (!query) {
+    if (!keyword.trim()) {
       return [];
     }
-    return chats.filter((chat) => {
-      const haystack = `${chat.name} ${getChatPreview(chat)}`.toLowerCase();
-      return haystack.includes(query);
-    });
+    return chats.filter((chat) => includesKeyword(keyword, chat.name, getChatPreview(chat)));
   }, [chats, keyword]);
 
   return (

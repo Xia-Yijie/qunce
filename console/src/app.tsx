@@ -34,6 +34,7 @@ import {
   formatMessageTime,
   formatReadableTime,
   getChatPath,
+  includesKeyword,
   getNodeAvatarConfig,
   getNodeDisplayName,
   getNodeMetaText,
@@ -42,8 +43,10 @@ import {
   getPersonaAvatarConfig,
   isEmbeddedNode,
   joinWorkspacePath,
+  removeChatSummary,
   renderMutedName,
   sortChats,
+  upsertChatSummary,
 } from "./chat-utils";
 import { ConversationList, QuickCreateMenu } from "./conversation-list";
 import { SearchInputDropdown } from "./search-input-dropdown";
@@ -149,14 +152,7 @@ const railItems = [
 ];
 
 const filterPersonasByKeyword = (personas: PersonaSummary[], keyword: string) => {
-  const query = keyword.trim().toLowerCase();
-  if (!query) {
-    return personas;
-  }
-  return personas.filter((persona) => {
-    const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name}`.toLowerCase();
-    return haystack.includes(query);
-  });
+  return personas.filter((persona) => includesKeyword(keyword, persona.name, persona.system_prompt, persona.node_name));
 };
 
 const toggleSelectedId = (selectedIds: string[], nextId: string) =>
@@ -261,10 +257,6 @@ const StartChatDialog = ({
 
   const filteredPersonas = useMemo(() => filterPersonasByKeyword(personas, keyword), [keyword, personas]);
 
-  const togglePersona = (personaId: string) => {
-    setSelectedIds((current) => toggleSelectedId(current, personaId));
-  };
-
   const submit = async () => {
     if (selectedIds.length === 0 || creating) {
       return;
@@ -308,7 +300,7 @@ const StartChatDialog = ({
             <PersonaSelectionList
               personas={filteredPersonas}
               selectedIds={selectedIds}
-              onToggle={togglePersona}
+              onToggle={(personaId) => setSelectedIds((current) => toggleSelectedId(current, personaId))}
               emptyText="暂无可选的智能体，请先创建角色后再发起聊天。"
             />
           </div>
@@ -319,7 +311,7 @@ const StartChatDialog = ({
             <SelectedPersonaTags
               personas={personas}
               selectedIds={selectedIds}
-              onToggle={togglePersona}
+              onToggle={(personaId) => setSelectedIds((current) => toggleSelectedId(current, personaId))}
               emptyText="请选择至少一个智能体加入会话，右侧会显示当前已选成员。"
             />
           </div>
@@ -375,17 +367,13 @@ const AddMembersDialog = ({
     [availablePersonas, keyword],
   );
 
-  const togglePersona = (personaId: string) => {
-    setSelectedIds((current) => toggleSelectedId(current, personaId));
-  };
-
   const submit = async () => {
     if (!chatId || selectedIds.length === 0 || saving) {
       return;
     }
     setSaving(true);
     try {
-      const payload = await api.addChatMembers(chatId, { personaIds: selectedIds, actorName: "群成员" });
+      const payload = await api.addChatMembers(chatId, { personaIds: selectedIds });
       onAdded(payload);
       if (payload.added_persona_ids.length === 0) {
         message.info("所选成员已在当前聊天中");
@@ -406,7 +394,7 @@ const AddMembersDialog = ({
             <PersonaSelectionList
               personas={filteredPersonas}
               selectedIds={selectedIds}
-              onToggle={togglePersona}
+              onToggle={(personaId) => setSelectedIds((current) => toggleSelectedId(current, personaId))}
               emptyText="没有可添加的成员"
             />
           </div>
@@ -417,7 +405,7 @@ const AddMembersDialog = ({
             <SelectedPersonaTags
               personas={personas}
               selectedIds={selectedIds}
-              onToggle={togglePersona}
+              onToggle={(personaId) => setSelectedIds((current) => toggleSelectedId(current, personaId))}
               emptyText="选择要加入当前聊天的成员"
             />
           </div>
@@ -800,7 +788,7 @@ const MessageBubble = ({
   );
 };
 
-const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: boolean; lastNotice: string; chatId?: string }) => {
+const ChatPage = ({ chatId: forcedChatId }: { chatId?: string }) => {
   const { chatId } = useParams();
   const navigate = useNavigate();
   const activeChatId = forcedChatId ?? chatId;
@@ -951,11 +939,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
   }
 
   const filteredMembers = snapshot.members.filter((member) => {
-    const query = memberKeyword.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-    return `${member.name} ${member.persona_id}`.toLowerCase().includes(query);
+    return includesKeyword(memberKeyword, member.name, member.persona_id);
   });
   const detailMetaItems = [
     { label: "成员数量", value: `${snapshot.members.length} 人` },
@@ -1004,7 +988,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
     queryClient.removeQueries({ queryKey: ["chat", chatIdToRemove] });
     queryClient.setQueryData(
       ["chats"],
-      (previous: ChatSummary[] | undefined) => (previous ?? []).filter((chat) => chat.chat_id !== chatIdToRemove),
+      (previous: ChatSummary[] | undefined) => removeChatSummary(previous, chatIdToRemove),
     );
     setAddMembersOpen(false);
     navigate("/chats");
@@ -1021,7 +1005,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
       cancelText: "取消",
       centered: true,
       onOk: async () => {
-        const payload = await api.removeChatMember(activeChatId, persona.persona_id, { actorName: "群成员" });
+        const payload = await api.removeChatMember(activeChatId, persona.persona_id);
         if (payload.dissolved) {
           applyDissolvedChat(activeChatId);
           message.success("最后一个成员已移出，群聊已解散");
@@ -1147,7 +1131,7 @@ const ChatPage = ({ connected, lastNotice, chatId: forcedChatId }: { connected: 
         } else {
           queryClient.setQueryData(
             ["chats"],
-            (previous: ChatSummary[] | undefined) => (previous ?? []).filter((item) => item.chat_id !== chat.chat_id),
+            (previous: ChatSummary[] | undefined) => removeChatSummary(previous, chat.chat_id),
           );
         }
         message.success("群聊已解散");
@@ -1682,15 +1666,11 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
     [nodes, personas],
   );
   const searchResults = useMemo(() => {
-    const query = searchKeyword.trim().toLowerCase();
-    if (!query) {
+    if (!searchKeyword.trim()) {
       return [];
     }
     const agentResults = personas
-      .filter((persona) => {
-        const haystack = `${persona.name} ${persona.system_prompt} ${persona.node_name} ${persona.workspace_dir}`.toLowerCase();
-        return haystack.includes(query);
-      })
+      .filter((persona) => includesKeyword(searchKeyword, persona.name, persona.system_prompt, persona.node_name, persona.workspace_dir))
       .map((persona) => ({
         key: `agent:${persona.persona_id}`,
         title: persona.name,
@@ -1698,10 +1678,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
         onSelect: () => setSelectedEntryId(`agent:${persona.persona_id}`),
       }));
     const nodeResults = nodes
-      .filter((node) => {
-        const haystack = `${getNodeDisplayName(node)} ${getNodeName(node)} ${node.hello_message} ${node.remark}`.toLowerCase();
-        return haystack.includes(query);
-      })
+      .filter((node) => includesKeyword(searchKeyword, getNodeDisplayName(node), getNodeName(node), node.hello_message, node.remark))
       .map((node) => ({
         key: `node:${node.node_id}`,
         title: getNodeDisplayName(node),
@@ -1926,10 +1903,7 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
 
   const startChatWithPersona = async (persona: PersonaSummary) => {
     const chat = await api.createChat({ personaIds: [persona.persona_id] });
-    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
-      const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
-      return sortChats([{ ...chat, unread_count: 0 }, ...others]);
-    });
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => upsertChatSummary(previous, chat));
     navigate(getChatPath(chat.chat_id));
   };
 
@@ -2340,25 +2314,11 @@ const AppShell = () => {
   const { data: chats = [] } = useQuery({ queryKey: ["chats"], queryFn: api.chats });
   const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const { data: personas = [] } = useQuery({ queryKey: ["personas"], queryFn: api.personas });
-  const activeChatId = useMemo(() => {
-    const match = location.pathname.match(/^\/chats\/([^/]+)/);
-    if (match) {
-      return match[1];
-    }
-    if (location.pathname === "/chats") {
-      return null;
-    }
-    return null;
-  }, [location.pathname]);
-  const watchedChatIds = useMemo(() => chats.map((chat) => chat.chat_id), [chats]);
-  const consoleSocket = useConsoleSocket(watchedChatIds);
-  const selectedKey = useMemo(() => {
-    if (location.pathname === "/chats" || location.pathname.startsWith("/chats/")) {
-      return "/chats";
-    }
-    return location.pathname;
-  }, [location.pathname]);
-  const pendingNodeCount = useMemo(() => getPendingNodeCount(nodes), [nodes]);
+  const activeChatId = location.pathname.match(/^\/chats\/([^/]+)/)?.[1] ?? null;
+  const watchedChatIds = chats.map((chat) => chat.chat_id);
+  useConsoleSocket(watchedChatIds);
+  const selectedKey = location.pathname === "/chats" || location.pathname.startsWith("/chats/") ? "/chats" : location.pathname;
+  const pendingNodeCount = getPendingNodeCount(nodes);
   const openCreateChat = selectedKey === "/chats" && searchParams.get("create") === "chat";
 
   const closeCreateChat = () => {
@@ -2368,10 +2328,7 @@ const AppShell = () => {
   };
 
   const handleCreatedChat = (chat: ChatSummary) => {
-    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => {
-      const others = (previous ?? []).filter((entry) => entry.chat_id !== chat.chat_id);
-      return sortChats([{ ...chat, unread_count: 0 }, ...others]);
-    });
+    queryClient.setQueryData(["chats"], (previous: ChatSummary[] | undefined) => upsertChatSummary(previous, chat));
     closeCreateChat();
     navigate(getChatPath(chat.chat_id));
   };
@@ -2426,8 +2383,8 @@ const AppShell = () => {
           <Routes>
             <Route path="/" element={<Navigate to="/chats" replace />} />
             <Route path="/setup" element={<SetupPage />} />
-            <Route path="/chats" element={<ChatPage {...consoleSocket} />} />
-            <Route path="/chats/:chatId" element={<ChatPage {...consoleSocket} />} />
+            <Route path="/chats" element={<ChatPage />} />
+            <Route path="/chats/:chatId" element={<ChatPage />} />
             <Route path="/settings/nodes" element={<AgentDirectoryPage defaultKind="node" />} />
             <Route path="/friends" element={<AgentDirectoryPage defaultKind="agent" />} />
           </Routes>

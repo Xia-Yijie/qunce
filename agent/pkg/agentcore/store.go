@@ -1,4 +1,4 @@
-package main
+package agentcore
 
 import (
 	"database/sql"
@@ -11,11 +11,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type localStore struct {
+type LocalStore struct {
 	db *sql.DB
 }
 
-func openLocalStore(workDir string) (*localStore, error) {
+func OpenLocalStore(workDir string) (*LocalStore, error) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create workdir: %w", err)
 	}
@@ -26,7 +26,7 @@ func openLocalStore(workDir string) (*localStore, error) {
 		return nil, fmt.Errorf("open local state: %w", err)
 	}
 
-	store := &localStore{db: db}
+	store := &LocalStore{db: db}
 	if err := store.init(); err != nil {
 		db.Close()
 		return nil, err
@@ -35,7 +35,7 @@ func openLocalStore(workDir string) (*localStore, error) {
 	return store, nil
 }
 
-func (s *localStore) init() error {
+func (s *LocalStore) init() error {
 	if _, err := s.db.Exec(`
 		PRAGMA journal_mode = WAL;
 		PRAGMA busy_timeout = 5000;
@@ -80,11 +80,11 @@ func resolveLocalStatePath(workDir string) string {
 	return preferred
 }
 
-func (s *localStore) Close() error {
+func (s *LocalStore) Close() error {
 	return s.db.Close()
 }
 
-func (s *localStore) Get(key string) (string, error) {
+func (s *LocalStore) Get(key string) (string, error) {
 	var value string
 	err := s.db.QueryRow(`SELECT value FROM agent_config WHERE key = ?`, key).Scan(&value)
 	if err == sql.ErrNoRows {
@@ -96,7 +96,7 @@ func (s *localStore) Get(key string) (string, error) {
 	return value, nil
 }
 
-func (s *localStore) Set(key, value string) error {
+func (s *LocalStore) Set(key, value string) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil
@@ -113,7 +113,7 @@ func (s *localStore) Set(key, value string) error {
 	return nil
 }
 
-func (s *localStore) RecordEvent(eventType, payload string) error {
+func (s *LocalStore) RecordEvent(eventType, payload string) error {
 	if _, err := s.db.Exec(`
 		INSERT INTO agent_events(event_type, payload, created_at)
 		VALUES(?, ?, ?)

@@ -63,7 +63,12 @@ func shouldRunEmbeddedNode() bool {
 func runEmbeddedNodeOnce(cfg appConfig) error {
 	workspace := strings.TrimSpace(cfg.ServerDataDir)
 	if workspace == "" {
-		workspace = envOrDefault("HOME", ".")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			workspace = "."
+		} else {
+			workspace = home
+		}
 	}
 	workspace = filepath.Clean(filepath.Join(workspace, embeddedNodeWorkspaceSuffix))
 

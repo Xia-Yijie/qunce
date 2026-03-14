@@ -45,7 +45,13 @@ export const sortChats = (chats: ChatSummary[]) =>
 
 export const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSnapshot): ChatSummary => ({
   ...chat,
+  ...chatSummaryFromSnapshot(snapshot),
+});
+
+export const chatSummaryFromSnapshot = (snapshot: ChatSnapshot): Omit<ChatSummary, "chat_id"> & Pick<ChatSummary, "chat_id"> => ({
+  chat_id: snapshot.chat_id,
   name: snapshot.name,
+  mode: snapshot.mode,
   muted: snapshot.muted,
   pinned: snapshot.pinned,
   dnd: snapshot.dnd,
@@ -63,7 +69,23 @@ export const applyChatSummaryFromSnapshot = (chat: ChatSummary, snapshot: ChatSn
       : null,
 });
 
+export const removeChatSummary = (chats: ChatSummary[] | undefined, chatId: string) =>
+  (chats ?? []).filter((chat) => chat.chat_id !== chatId);
+
+export const upsertChatSummary = (chats: ChatSummary[] | undefined, chat: ChatSummary) => {
+  const others = removeChatSummary(chats, chat.chat_id);
+  return sortChats([{ ...chat, unread_count: chat.unread_count ?? 0 }, ...others]);
+};
+
 export const getPendingNodeCount = (nodes: NodeSummary[]) => nodes.filter((node) => node.can_accept).length;
+
+export const includesKeyword = (keyword: string, ...values: Array<string | null | undefined>) => {
+  const query = keyword.trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  return values.join(" ").toLowerCase().includes(query);
+};
 
 export const getChatPath = (chatId: string) => `/chats/${chatId}`;
 

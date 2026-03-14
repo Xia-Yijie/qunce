@@ -22,17 +22,8 @@ func newID(prefix string) string {
 	return prefix + "_" + encoded
 }
 
-func trimOrZero(raw string) string {
-	return strings.TrimSpace(raw)
-}
-
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
-}
-
-func asMap(raw interface{}) (map[string]interface{}, bool) {
-	payload, ok := raw.(map[string]interface{})
-	return payload, ok
 }
 
 func toString(raw interface{}, fallback string) string {

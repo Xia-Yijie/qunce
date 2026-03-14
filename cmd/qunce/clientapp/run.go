@@ -3,43 +3,24 @@ package clientapp
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"runtime"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
+	"qunce-agent/pkg/agentcore"
 )
-
-type endpointRef struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
-}
-
-type rawEnvelope struct {
-	V         int             `json:"v"`
-	Type      string          `json:"type"`
-	EventID   string          `json:"event_id"`
-	RequestID string          `json:"request_id,omitempty"`
-	TS        string          `json:"ts"`
-	Source    endpointRef     `json:"source"`
-	Target    endpointRef     `json:"target"`
-	Data      json.RawMessage `json:"data"`
-}
 
 type agentConfig struct {
 	ServerURL  string
@@ -51,7 +32,7 @@ type agentConfig struct {
 	Hello      string
 	MaxWorker  int
 	WorkDir    string
-	Store      *localStore
+	Store      *agentcore.LocalStore
 }
 
 type agentRuntime struct {
@@ -86,7 +67,7 @@ func loadConfig(args []string) (agentConfig, error) {
 	if err != nil {
 		hostname = "local-agent"
 	}
-	defaultNodeName := firstNonEmpty(os.Getenv("USER"), "agent") + "@" + hostname
+	defaultNodeName := agentcore.FirstNonEmpty(os.Getenv("QUNCE_NODE_NAME"), os.Getenv("USER"), os.Getenv("USERNAME"), "agent") + "@" + hostname
 
 	fs := flag.NewFlagSet("qunce-client", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -107,44 +88,44 @@ func loadConfig(args []string) (agentConfig, error) {
 		return agentConfig{}, errors.New("--link must use host:port only, do not include ws://")
 	}
 
-	serverURL, serverAddr, err := normalizeServerAddress(*link)
+	serverURL, serverAddr, err := agentcore.NormalizeServerAddress(*link)
 	if err != nil {
 		return agentConfig{}, err
 	}
 
-	workDir, err := resolveWorkDir(*workspace)
+	workDir, err := agentcore.ExpandHome(*workspace)
 	if err != nil {
 		return agentConfig{}, err
 	}
 
-	store, err := openLocalStore(workDir)
+	store, err := agentcore.OpenLocalStore(workDir)
 	if err != nil {
 		return agentConfig{}, err
 	}
 
-	pairToken := firstNonEmpty(
+	pairToken := agentcore.FirstNonEmpty(
 		os.Getenv("QUNCE_PAIR_TOKEN"),
-		mustGetConfig(store, "pair_token"),
+		agentcore.MustGetConfig(store, "pair_token"),
 		"dev-pair-token",
 	)
-	nodeName := firstNonEmpty(
+	nodeName := agentcore.FirstNonEmpty(
 		os.Getenv("QUNCE_NODE_NAME"),
 		defaultNodeName,
-		mustGetConfig(store, "node_name"),
+		agentcore.MustGetConfig(store, "node_name"),
 	)
-	helloMessage := firstNonEmpty(
+	helloMessage := agentcore.FirstNonEmpty(
 		strings.TrimSpace(*hello),
-		mustGetConfig(store, "hello_message"),
+		agentcore.MustGetConfig(store, "hello_message"),
 		"你好，我想加入群策。",
 	)
-	nodeID := firstNonEmpty(
+	nodeID := agentcore.FirstNonEmpty(
 		strings.TrimSpace(*nodeIDArg),
 		os.Getenv("QUNCE_NODE_ID"),
-		mustGetConfig(store, "node_id"),
-		generateNodeID(),
+		agentcore.MustGetConfig(store, "node_id"),
+		agentcore.GenerateNodeID(),
 	)
 
-	if err := persistBootConfig(store, serverAddr, pairToken, nodeID, nodeName, workDir, helloMessage); err != nil {
+	if err := agentcore.PersistBootConfig(store, serverAddr, pairToken, nodeID, nodeName, workDir, helloMessage); err != nil {
 		store.Close()
 		return agentConfig{}, err
 	}
@@ -175,31 +156,31 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 
 	runtime := &agentRuntime{conn: conn, cfg: cfg, logger: logger}
 
-	if err := runtime.send(ctx, buildEnvelope("agent.hello", cfg.NodeID, map[string]any{
+	if err := runtime.send(ctx, agentcore.BuildEnvelope("agent.hello", cfg.NodeID, map[string]any{
 		"username":      cfg.NodeName,
 		"hostname":      cfg.Hostname,
 		"hello_message": cfg.Hello,
 		"work_dir":      cfg.WorkDir,
-		"platform":      runtimePlatform(),
-		"arch":          runtimeArch(),
+		"platform":      goruntime.GOOS,
+		"arch":          goruntime.GOARCH,
 		"agent_version": "0.1.0",
 		"session_id":    nil,
 	})); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
 
-	if _, err := readEnvelope(ctx, conn); err != nil {
+	if _, err := agentcore.ReadEnvelope(ctx, conn); err != nil {
 		return fmt.Errorf("read server hello: %w", err)
 	}
 
-	if err := runtime.send(ctx, buildEnvelope("agent.auth", cfg.NodeID, map[string]any{
+	if err := runtime.send(ctx, agentcore.BuildEnvelope("agent.auth", cfg.NodeID, map[string]any{
 		"pair_token": cfg.PairToken,
 		"node_id":    cfg.NodeID,
 	})); err != nil {
 		return fmt.Errorf("send auth: %w", err)
 	}
 
-	authEnvelope, err := readEnvelope(ctx, conn)
+	authEnvelope, err := agentcore.ReadEnvelope(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("read auth reply: %w", err)
 	}
@@ -210,7 +191,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		return fmt.Errorf("auth rejected: %s", authEnvelope.Type)
 	}
 
-	authPayload, err := parseAuthReply(authEnvelope.Data)
+	authPayload, err := agentcore.ParseAuthReply(authEnvelope.Data)
 	if err != nil {
 		return fmt.Errorf("decode auth reply: %w", err)
 	}
@@ -220,11 +201,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 	if authPayload.NodeName != "" {
 		cfg.NodeName = authPayload.NodeName
 	}
-	if err := persistBootConfig(cfg.Store, cfg.ServerAddr, cfg.PairToken, cfg.NodeID, cfg.NodeName, cfg.WorkDir, cfg.Hello); err != nil {
+	if err := agentcore.PersistBootConfig(cfg.Store, cfg.ServerAddr, cfg.PairToken, cfg.NodeID, cfg.NodeName, cfg.WorkDir, cfg.Hello); err != nil {
 		return err
 	}
 
-	if err := runtime.send(ctx, buildEnvelope("agent.state.report", cfg.NodeID, map[string]any{
+	if err := runtime.send(ctx, agentcore.BuildEnvelope("agent.state.report", cfg.NodeID, map[string]any{
 		"status":           "online",
 		"max_workers":      cfg.MaxWorker,
 		"worker_count":     0,
@@ -236,7 +217,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 	readErrCh := make(chan error, 1)
 	go func() {
 		for {
-			message, readErr := readEnvelope(ctx, conn)
+			message, readErr := agentcore.ReadEnvelope(ctx, conn)
 			if readErr != nil {
 				logger.Warn("read loop stopped", "error", readErr)
 				select {
@@ -268,7 +249,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 		case readErr := <-readErrCh:
 			return fmt.Errorf("connection closed: %w", readErr)
 		case <-ticker.C:
-			if err := runtime.send(ctx, buildEnvelope("agent.ping", cfg.NodeID, map[string]any{
+			if err := runtime.send(ctx, agentcore.BuildEnvelope("agent.ping", cfg.NodeID, map[string]any{
 				"running_turn_ids":       []string{},
 				"worker_count":           0,
 				"load":                   0.0,
@@ -299,7 +280,7 @@ type workspaceValidationRequest struct {
 	WorkspaceDir string `json:"workspace_dir"`
 }
 
-func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelope) {
+func (r *agentRuntime) handleTurnRequest(ctx context.Context, message agentcore.RawEnvelope) {
 	var data turnRequestData
 	if err := json.Unmarshal(message.Data, &data); err != nil {
 		r.logger.Warn("failed to decode turn request", "error", err)
@@ -310,7 +291,7 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 		return
 	}
 
-	if err := r.send(ctx, buildEnvelope("agent.turn.read", r.cfg.NodeID, map[string]any{
+	if err := r.send(ctx, agentcore.BuildEnvelope("agent.turn.read", r.cfg.NodeID, map[string]any{
 		"turn_id":          data.TurnID,
 		"worker_count":     0,
 		"running_turn_ids": []string{},
@@ -323,7 +304,7 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 		return
 	}
 
-	if err := r.send(ctx, buildEnvelope("agent.turn.started", r.cfg.NodeID, map[string]any{
+	if err := r.send(ctx, agentcore.BuildEnvelope("agent.turn.started", r.cfg.NodeID, map[string]any{
 		"turn_id":          data.TurnID,
 		"worker_count":     1,
 		"running_turn_ids": []string{data.TurnID},
@@ -344,7 +325,7 @@ func (r *agentRuntime) handleTurnRequest(ctx context.Context, message rawEnvelop
 			data.WorkspaceDir,
 		)
 	}
-	if err := r.send(ctx, buildEnvelope("agent.turn.completed", r.cfg.NodeID, map[string]any{
+	if err := r.send(ctx, agentcore.BuildEnvelope("agent.turn.completed", r.cfg.NodeID, map[string]any{
 		"turn_id":          data.TurnID,
 		"output":           output,
 		"worker_count":     0,
@@ -406,7 +387,7 @@ func buildTurnPrompt(data turnRequestData, workspaceDir string) string {
 	builder.WriteString("Keep the reply concise and useful.\n\n")
 	builder.WriteString("Context:\n")
 	builder.WriteString("Persona name: ")
-	builder.WriteString(firstNonEmpty(strings.TrimSpace(data.PersonaName), strings.TrimSpace(data.PersonaID), "Agent"))
+	builder.WriteString(agentcore.FirstNonEmpty(strings.TrimSpace(data.PersonaName), strings.TrimSpace(data.PersonaID), "Agent"))
 	builder.WriteString("\n")
 	if prompt := strings.TrimSpace(data.SystemPrompt); prompt != "" {
 		builder.WriteString("System prompt:\n")
@@ -417,7 +398,7 @@ func buildTurnPrompt(data turnRequestData, workspaceDir string) string {
 	builder.WriteString(workspaceDir)
 	builder.WriteString("\n")
 	builder.WriteString("User name: ")
-	builder.WriteString(firstNonEmpty(strings.TrimSpace(data.SenderName), "user"))
+	builder.WriteString(agentcore.FirstNonEmpty(strings.TrimSpace(data.SenderName), "user"))
 	builder.WriteString("\n")
 	builder.WriteString("User message:\n")
 	builder.WriteString(strings.TrimSpace(data.Content))
@@ -504,17 +485,17 @@ func defaultCodexCommandCandidates() []string {
 	return []string{"codex"}
 }
 
-func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message rawEnvelope) {
+func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message agentcore.RawEnvelope) {
 	var data workspaceValidationRequest
 	if err := json.Unmarshal(message.Data, &data); err != nil {
 		r.logger.Warn("failed to decode workspace validation request", "error", err)
 		return
 	}
 
-	ok, normalizedPath, detail := validateWorkspacePath(strings.TrimSpace(data.WorkspaceDir))
+	ok, normalizedPath, detail := agentcore.ValidateWorkspacePath(strings.TrimSpace(data.WorkspaceDir))
 	if err := r.send(
 		ctx,
-		buildReplyEnvelope(
+		agentcore.BuildReplyEnvelope(
 			"agent.workspace.validated",
 			r.cfg.NodeID,
 			message.RequestID,
@@ -532,226 +513,7 @@ func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message ra
 func (r *agentRuntime) send(ctx context.Context, payload map[string]any) error {
 	r.sendLock.Lock()
 	defer r.sendLock.Unlock()
-	return sendEnvelope(ctx, r.conn, payload)
-}
-
-func buildEnvelope(messageType, nodeID string, data map[string]any) map[string]any {
-	return buildReplyEnvelope(messageType, nodeID, fmt.Sprintf("req_%d", time.Now().UnixNano()), data)
-}
-
-func buildReplyEnvelope(messageType, nodeID, requestID string, data map[string]any) map[string]any {
-	targetID := "main"
-	if nodeID == "" {
-		nodeID = "unbound"
-	}
-
-	return map[string]any{
-		"v":          1,
-		"type":       messageType,
-		"event_id":   fmt.Sprintf("evt_%d", time.Now().UnixNano()),
-		"request_id": requestID,
-		"ts":         time.Now().UTC().Format(time.RFC3339),
-		"source": map[string]any{
-			"kind": "agent",
-			"id":   nodeID,
-		},
-		"target": map[string]any{
-			"kind": "server",
-			"id":   targetID,
-		},
-		"data": data,
-	}
-}
-
-func sendEnvelope(ctx context.Context, conn *websocket.Conn, payload map[string]any) error {
-	return wsjson.Write(ctx, conn, payload)
-}
-
-func readEnvelope(ctx context.Context, conn *websocket.Conn) (rawEnvelope, error) {
-	var env rawEnvelope
-	err := wsjson.Read(ctx, conn, &env)
-	return env, err
-}
-
-func validateWorkspacePath(raw string) (bool, string, string) {
-	if raw == "" {
-		return false, "", "工作目录不能为空"
-	}
-
-	normalized := filepath.Clean(raw)
-	if !filepath.IsAbs(normalized) {
-		return false, normalized, "工作目录必须是绝对路径"
-	}
-
-	info, err := os.Stat(normalized)
-	if err == nil {
-		if !info.IsDir() {
-			return false, normalized, "工作目录已存在但不是目录"
-		}
-		entries, readErr := os.ReadDir(normalized)
-		if readErr != nil {
-			return false, normalized, "目录不可读取"
-		}
-		if len(entries) > 0 {
-			return false, normalized, "目录必须为空"
-		}
-		if writeErr := verifyDirectoryWritable(normalized); writeErr != nil {
-			return false, normalized, "目录不可写"
-		}
-		return true, normalized, "目录可用"
-	}
-
-	if !errors.Is(err, os.ErrNotExist) {
-		return false, normalized, "无法访问目录，请检查权限"
-	}
-
-	parent := filepath.Dir(normalized)
-	parentInfo, parentErr := os.Stat(parent)
-	if parentErr != nil {
-		if errors.Is(parentErr, os.ErrNotExist) {
-			return false, normalized, "父目录不存在"
-		}
-		return false, normalized, "无法访问父目录"
-	}
-	if !parentInfo.IsDir() {
-		return false, normalized, "父路径不是目录"
-	}
-	if writeErr := verifyParentCreatable(parent); writeErr != nil {
-		return false, normalized, "父目录不可写"
-	}
-	return true, normalized, "目录可用"
-}
-
-func verifyDirectoryWritable(dir string) error {
-	probe, err := os.CreateTemp(dir, ".qunce-write-check-*")
-	if err != nil {
-		return err
-	}
-	if closeErr := probe.Close(); closeErr != nil {
-		_ = os.Remove(probe.Name())
-		return closeErr
-	}
-	return os.Remove(probe.Name())
-}
-
-func verifyParentCreatable(parent string) error {
-	probeDir, err := os.MkdirTemp(parent, ".qunce-create-check-*")
-	if err != nil {
-		return err
-	}
-	return os.Remove(probeDir)
-}
-
-func normalizeServerAddress(raw string) (string, string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", "", errors.New("server address is empty")
-	}
-
-	if strings.Contains(trimmed, "://") {
-		parsed, err := url.Parse(trimmed)
-		if err != nil {
-			return "", "", fmt.Errorf("invalid server address: %w", err)
-		}
-		if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
-			return "", "", fmt.Errorf("unsupported websocket scheme %q", parsed.Scheme)
-		}
-		if parsed.Host == "" {
-			return "", "", errors.New("server address missing host:port")
-		}
-		if parsed.Path == "" || parsed.Path == "/" {
-			parsed.Path = "/ws/agent"
-		}
-		return parsed.String(), parsed.Host, nil
-	}
-
-	withScheme := trimmed
-	if !strings.HasPrefix(withScheme, "ws://") && !strings.HasPrefix(withScheme, "wss://") {
-		withScheme = "ws://" + withScheme
-	}
-
-	parsed, err := url.Parse(withScheme)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid server address: %w", err)
-	}
-	if parsed.Host == "" {
-		return "", "", errors.New("server address missing host:port")
-	}
-	if parsed.Path == "" || parsed.Path == "/" {
-		parsed.Path = "/ws/agent"
-	}
-
-	return parsed.String(), parsed.Host, nil
-}
-
-func resolveWorkDir(raw string) (string, error) {
-	return expandHome(raw)
-}
-
-func persistBootConfig(store *localStore, serverAddr, pairToken, nodeID, nodeName, workDir, helloMessage string) error {
-	for key, value := range map[string]string{
-		"server_addr":   serverAddr,
-		"pair_token":    pairToken,
-		"node_id":       nodeID,
-		"node_name":     nodeName,
-		"work_dir":      workDir,
-		"hello_message": helloMessage,
-	} {
-		if err := store.Set(key, value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func mustGetConfig(store *localStore, key string) string {
-	value, err := store.Get(key)
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
-func runtimePlatform() string {
-	return runtime.GOOS
-}
-
-func runtimeArch() string {
-	return runtime.GOARCH
-}
-
-type authReplyData struct {
-	NodeID   string `json:"node_id"`
-	NodeName string `json:"node_name"`
-}
-
-func parseAuthReply(data json.RawMessage) (authReplyData, error) {
-	if len(data) == 0 || string(data) == "null" {
-		return authReplyData{}, nil
-	}
-
-	var payload authReplyData
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return authReplyData{}, err
-	}
-	return payload, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func generateNodeID() string {
-	buffer := make([]byte, 6)
-	if _, err := io.ReadFull(rand.Reader, buffer); err != nil {
-		return fmt.Sprintf("node_%d", time.Now().UnixNano())
-	}
-	return fmt.Sprintf("node_%x", buffer)
+	return agentcore.SendEnvelope(ctx, r.conn, payload)
 }
 
 func printUsage() {
@@ -759,22 +521,4 @@ func printUsage() {
 		os.Stderr,
 		`usage: qunce client --link 127.0.0.1:8000 [--workspace ~/.qunce] [--hello "你好，我想加入群策。"]`,
 	)
-}
-
-func expandHome(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", errors.New("workdir is empty")
-	}
-	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user home: %w", err)
-		}
-		if trimmed == "~" {
-			return home, nil
-		}
-		return filepath.Join(home, strings.TrimPrefix(trimmed, "~/")), nil
-	}
-	return filepath.Clean(trimmed), nil
 }

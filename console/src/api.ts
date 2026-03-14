@@ -11,6 +11,10 @@ import type {
   WorkspaceValidation,
 } from "./types";
 
+const CHAT_MEMBER_ACTOR_NAME = "群成员";
+const CHAT_MUTE_ACTOR_NAME = "群状态";
+const USER_SENDER_NAME = "你";
+
 const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(url, init);
   if (!response.ok) {
@@ -30,6 +34,16 @@ const fetchJson = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>;
 };
 
+const postNodeProfile = (
+  nodeId: string,
+  payload: { display_symbol: string; remark: string; avatar_bg_color: string; avatar_text_color: string },
+) =>
+  fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
 export const api = {
   chats: () => fetchJson<ChatSummary[]>("/api/chats"),
   createChat: (payload: { personaIds: string[]; name?: string }) =>
@@ -45,21 +59,11 @@ export const api = {
   acceptNode: (
     nodeId: string,
     payload: { display_symbol: string; remark: string; avatar_bg_color: string; avatar_text_color: string },
-  ) =>
-    fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
+  ) => postNodeProfile(nodeId, payload),
   updateNode: (
     nodeId: string,
     payload: { display_symbol: string; remark: string; avatar_bg_color: string; avatar_text_color: string },
-  ) =>
-    fetchJson<NodeSummary>(`/api/nodes/${nodeId}/accept`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }),
+  ) => postNodeProfile(nodeId, payload),
   rejectNode: (nodeId: string) => fetchJson<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
   chatSnapshot: (chatId: string) => fetchJson<ChatSnapshot>(`/api/chats/${chatId}/snapshot`),
   addChatMembers: (chatId: string, payload: { personaIds: string[]; actorName?: string }) =>
@@ -68,14 +72,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         persona_ids: payload.personaIds,
-        actor_name: payload.actorName,
+        actor_name: payload.actorName ?? CHAT_MEMBER_ACTOR_NAME,
       }),
     }),
   removeChatMember: (chatId: string, personaId: string, payload?: { actorName?: string }) =>
     fetchJson<RemoveChatMemberResponse>(`/api/chats/${chatId}/members/${personaId}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor_name: payload?.actorName }),
+      body: JSON.stringify({ actor_name: payload?.actorName ?? CHAT_MEMBER_ACTOR_NAME }),
     }),
   deleteChat: (chatId: string) =>
     fetchJson<DeleteChatResponse>(`/api/chats/${chatId}`, {
@@ -85,13 +89,13 @@ export const api = {
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/mute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ muted, actor_name: "群状态" }),
+      body: JSON.stringify({ muted, actor_name: CHAT_MUTE_ACTOR_NAME }),
     }),
   toggleChatMemberMute: (chatId: string, personaId: string, muted: boolean) =>
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/members/${personaId}/mute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ muted, actor_name: "群成员" }),
+      body: JSON.stringify({ muted, actor_name: CHAT_MEMBER_ACTOR_NAME }),
     }),
   updateChatPreferences: (chatId: string, payload: { pinned?: boolean; dnd?: boolean; markedUnread?: boolean }) =>
     fetchJson<ChatSnapshot>(`/api/chats/${chatId}/preferences`, {
@@ -146,6 +150,6 @@ export const api = {
     fetchJson<{ ok: boolean }>(`/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, sender_name: "你" }),
+      body: JSON.stringify({ content, sender_name: USER_SENDER_NAME }),
     }),
 };

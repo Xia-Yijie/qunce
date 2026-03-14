@@ -32,7 +32,6 @@ var apiRouteCatalog = []routeSpec{
 	{"/api/nodes/<node_id>/workspace-check", []string{"POST"}},
 	{"/api/nodes/<node_id>/accept", []string{"POST"}},
 	{"/api/nodes/<node_id>", []string{"DELETE"}},
-	{"/api/chat-start", []string{"POST"}},
 }
 
 type handlerContext struct {
@@ -786,37 +785,6 @@ func (ctx *handlerContext) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (ctx *handlerContext) handleChatStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w)
-		return
-	}
-	body := parseBody(r)
-	rawPersonaIDs := body["persona_ids"]
-	if rawPersonaIDs == nil {
-		badRequest(w, "persona_id_required")
-		return
-	}
-	name := strings.TrimSpace(toString(body["name"], ""))
-	personaIDs, err := parsePersonaIDs(rawPersonaIDs, "persona_id_required")
-	if err != nil {
-		badRequest(w, err.Error())
-		return
-	}
-	personas, err := loadOrderedPersonas(ctx.state, personaIDs)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	chat := ctx.state.createOrGetChat(personas, name)
-	snapshot := ctx.state.chatSnapshot(chat.ChatID)
-	if snapshot == nil {
-		writeError(w, http.StatusNotFound, "chat_not_found")
-		return
-	}
-	writeJSON(w, http.StatusCreated, chatSummaryPayload(snapshot))
-}
-
 func splitPath(raw string) []string {
 	clean := path.Clean(raw)
 	parts := strings.Split(strings.Trim(clean, "/"), "/")
@@ -856,9 +824,6 @@ func registerRoutes(mux *http.ServeMux, ctx *handlerContext) {
 			return
 		}
 		ctx.handleMeta(w)
-	})
-	mux.HandleFunc("/api/chat-start", func(w http.ResponseWriter, r *http.Request) {
-		ctx.handleChatStart(w, r)
 	})
 	mux.HandleFunc("/api/chats", ctx.handleChats)
 	mux.HandleFunc("/api/personas", ctx.handlePersonas)

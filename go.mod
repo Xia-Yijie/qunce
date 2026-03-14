@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/gorilla/websocket v1.5.3
 	modernc.org/sqlite v1.46.1
+	qunce-agent v0.0.0
 )
 
 require (
@@ -20,3 +21,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace qunce-agent => ./agent

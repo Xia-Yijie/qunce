@@ -21,23 +21,24 @@ type messagePayload struct {
 }
 
 type turnPayload struct {
-	TurnID       string `json:"turn_id"`
-	ChatID       string `json:"chat_id"`
-	MessageID    string `json:"message_id"`
-	Content      string `json:"content"`
-	Status       string `json:"status"`
-	AssignedNode string `json:"assigned_node_id"`
-	SenderName   string `json:"sender_name"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	PersonaID    string `json:"persona_id"`
-	PersonaName  string `json:"persona_name"`
-	WorkspaceDir string `json:"workspace_dir"`
-	SystemPrompt string `json:"system_prompt"`
-	AgentKey     string `json:"agent_key"`
-	AgentLabel   string `json:"agent_label"`
-	Output       string `json:"output,omitempty"`
-	Muted        bool   `json:"muted"`
+	TurnID        string `json:"turn_id"`
+	ChatID        string `json:"chat_id"`
+	MessageID     string `json:"message_id"`
+	Content       string `json:"content"`
+	Status        string `json:"status"`
+	AssignedNode  string `json:"assigned_node_id"`
+	SenderName    string `json:"sender_name"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+	PersonaID     string `json:"persona_id"`
+	PersonaName   string `json:"persona_name"`
+	WorkspaceDir  string `json:"workspace_dir"`
+	SystemPrompt  string `json:"system_prompt"`
+	AgentKey      string `json:"agent_key"`
+	AgentLabel    string `json:"agent_label"`
+	LaunchCommand string `json:"launch_command"`
+	Output        string `json:"output,omitempty"`
+	Muted         bool   `json:"muted"`
 }
 
 type chatRecord struct {
@@ -111,6 +112,7 @@ type personaRecord struct {
 	SystemPrompt    string `json:"system_prompt"`
 	AgentKey        string `json:"agent_key"`
 	AgentLabel      string `json:"agent_label"`
+	LaunchCommand   string `json:"launch_command"`
 	ModelProvider   string `json:"model_provider"`
 	AvatarSymbol    string `json:"avatar_symbol"`
 	AvatarBGColor   string `json:"avatar_bg_color"`

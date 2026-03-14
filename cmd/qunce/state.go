@@ -388,7 +388,7 @@ func (s *state) addPersona(record *personaRecord) (*personaRecord, error) {
 	}
 	now := nowRFC3339()
 	record.Status = firstNonEmpty(record.Status, "active")
-	record.ModelProvider = firstNonEmpty(record.ModelProvider, "codex")
+	record.ModelProvider = firstNonEmpty(record.ModelProvider, "custom")
 	record.CreatedAt = firstNonEmpty(record.CreatedAt, now)
 	record.UpdatedAt = now
 	s.data.Personas[record.PersonaID] = clonePersona(record)
@@ -866,6 +866,9 @@ func (s *state) createTurn(
 	}
 	if agentLabel, ok := extras["agent_label"].(string); ok {
 		turn.AgentLabel = agentLabel
+	}
+	if launchCommand, ok := extras["launch_command"].(string); ok {
+		turn.LaunchCommand = launchCommand
 	}
 	if output, ok := extras["output"].(string); ok {
 		turn.Output = output

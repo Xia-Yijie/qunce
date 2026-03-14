@@ -169,6 +169,7 @@ func personaSummaryPayload(persona *personaRecord) map[string]interface{} {
 		"system_prompt":     persona.SystemPrompt,
 		"agent_key":         persona.AgentKey,
 		"agent_label":       persona.AgentLabel,
+		"launch_command":    persona.LaunchCommand,
 		"model_provider":    persona.ModelProvider,
 		"avatar_symbol":     persona.AvatarSymbol,
 		"avatar_bg_color":   persona.AvatarBGColor,

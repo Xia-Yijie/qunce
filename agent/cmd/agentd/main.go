@@ -257,18 +257,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 }
 
 type turnRequestData struct {
-	TurnID       string `json:"turn_id"`
-	ChatID       string `json:"chat_id"`
-	MessageID    string `json:"message_id"`
-	Content      string `json:"content"`
-	SenderName   string `json:"sender_name"`
-	PersonaID    string `json:"persona_id"`
-	PersonaName  string `json:"persona_name"`
-	WorkspaceDir string `json:"workspace_dir"`
-	SystemPrompt string `json:"system_prompt"`
-	AgentKey     string `json:"agent_key"`
-	AgentLabel   string `json:"agent_label"`
-	Muted        bool   `json:"muted"`
+	TurnID        string `json:"turn_id"`
+	ChatID        string `json:"chat_id"`
+	MessageID     string `json:"message_id"`
+	Content       string `json:"content"`
+	SenderName    string `json:"sender_name"`
+	PersonaID     string `json:"persona_id"`
+	PersonaName   string `json:"persona_name"`
+	WorkspaceDir  string `json:"workspace_dir"`
+	SystemPrompt  string `json:"system_prompt"`
+	AgentKey      string `json:"agent_key"`
+	AgentLabel    string `json:"agent_label"`
+	LaunchCommand string `json:"launch_command"`
+	Muted         bool   `json:"muted"`
 }
 
 type workspaceValidationRequest struct {

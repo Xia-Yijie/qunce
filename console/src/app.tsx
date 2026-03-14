@@ -29,7 +29,6 @@ import {
   DEFAULT_PERSONA_AVATAR_TEXT,
   DEFAULT_NODE_AVATAR_BG,
   DEFAULT_NODE_AVATAR_TEXT,
-  agentOptions,
   applyChatSummaryFromSnapshot,
   formatMessageTime,
   formatReadableTime,
@@ -150,6 +149,9 @@ const railItems = [
   { key: "/chats", icon: <ChatRailIcon />, description: "聊天" },
   { key: "/friends", icon: <AgentRailIcon />, description: "Agent" },
 ];
+
+const DEFAULT_LAUNCH_COMMAND =
+  'codex exec --skip-git-repo-check --color never -C "{workspace_dir}" --output-last-message "{output_path}" "{prompts}"';
 
 const filterPersonasByKeyword = (personas: PersonaSummary[], keyword: string) => {
   return personas.filter((persona) => includesKeyword(keyword, persona.name, persona.system_prompt, persona.node_name));
@@ -1416,8 +1418,9 @@ const FriendWizard = ({
     node_id: "",
     workspace_dir: "",
     system_prompt: "",
-    agent_key: agentOptions[0].key,
-    agent_label: agentOptions[0].label,
+    agent_key: "",
+    agent_label: "",
+    launch_command: DEFAULT_LAUNCH_COMMAND,
     avatar_symbol: "",
     avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
     avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
@@ -1434,8 +1437,9 @@ const FriendWizard = ({
         node_id: "",
         workspace_dir: "",
         system_prompt: "",
-        agent_key: agentOptions[0].key,
-        agent_label: agentOptions[0].label,
+        agent_key: "",
+        agent_label: "",
+        launch_command: DEFAULT_LAUNCH_COMMAND,
         avatar_symbol: "",
         avatar_bg_color: DEFAULT_PERSONA_AVATAR_BG,
         avatar_text_color: DEFAULT_PERSONA_AVATAR_TEXT,
@@ -1449,13 +1453,12 @@ const FriendWizard = ({
     }
   }, [approvedNodes, draft.node_id]);
 
-  const selectedAgent = agentOptions.find((item) => item.key === draft.agent_key) ?? agentOptions[0];
   const selectedNode = approvedNodes.find((node) => node.node_id === draft.node_id) ?? null;
   const canContinue =
     (step === 0 && Boolean(draft.name.trim()) && Boolean(draft.node_id)) ||
     (step === 1 && Boolean(draft.workspace_dir.trim())) ||
     (step === 2 && Boolean(draft.system_prompt.trim())) ||
-    step === 3;
+    (step === 3 && Boolean(draft.agent_key.trim()) && Boolean(draft.launch_command.trim()));
 
   const submit = async () => {
     setSaving(true);
@@ -1465,7 +1468,9 @@ const FriendWizard = ({
         name: draft.name.trim(),
         workspace_dir: draft.workspace_dir.trim(),
         system_prompt: draft.system_prompt.trim(),
-        agent_label: selectedAgent.label,
+        agent_key: draft.agent_key.trim(),
+        agent_label: draft.agent_key.trim(),
+        launch_command: draft.launch_command.trim(),
         avatar_symbol: (draft.avatar_symbol || draft.name || "?").trim().slice(0, 1),
       });
       message.success(`已创建智能体 ${persona.name}`);
@@ -1599,14 +1604,25 @@ const FriendWizard = ({
           ) : null}
           {step === 3 ? (
             <div className="wizard-field-stack">
-              <Select
+              <Input
+                placeholder="网络代理，例如：http://localhost:7897/"
                 value={draft.agent_key}
-                onChange={(value) => {
-                  const selected = agentOptions.find((item) => item.key === value) ?? agentOptions[0];
-                  setDraft((current) => ({ ...current, agent_key: selected.key, agent_label: selected.label }));
-                }}
-                options={agentOptions.map((item) => ({ value: item.key, label: item.label }))}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    agent_key: event.target.value,
+                    agent_label: event.target.value,
+                  }))
+                }
               />
+              <Input
+                placeholder='启动命令，例如：codex exec --skip-git-repo-check --color never -C "{workspace_dir}" --output-last-message "{output_path}" "{prompts}"'
+                value={draft.launch_command}
+                onChange={(event) => setDraft((current) => ({ ...current, launch_command: event.target.value }))}
+              />
+              <Typography.Text type="secondary" className="wizard-path-hint">
+                启动命令会在工作目录中执行，支持占位符 {"{workspace_dir}"}、{"{output_path}"}、{"{prompts}"}。
+              </Typography.Text>
             </div>
           ) : null}
         </div>
@@ -2132,8 +2148,12 @@ const AgentDirectoryPage = ({ defaultKind }: { defaultKind: "agent" | "node" }) 
                     <span className="profile-value-wrap">{selectedEntry.system_prompt || "-"}</span>
                   </div>
                   <div className="profile-row">
-                    <span className="profile-label">Agent 类型</span>
-                    <span>{selectedEntry.agent_label || selectedEntry.model_provider || "codex"}</span>
+                    <span className="profile-label">网络代理</span>
+                    <span>{selectedEntry.agent_label || selectedEntry.agent_key || "-"}</span>
+                  </div>
+                  <div className="profile-row">
+                    <span className="profile-label">启动命令</span>
+                    <span className="profile-value-wrap">{selectedEntry.launch_command || "-"}</span>
                   </div>
                 </div>
                 <div className="profile-actions">
@@ -2295,7 +2315,6 @@ const RuntimeSettingsContent = () => (
     <Typography.Title level={3}>运行设置</Typography.Title>
     <List
       dataSource={[
-        "默认模型供应商：codex",
         "默认超时：30 秒",
         "默认自由讨论轮数：3",
         "默认每轮人数：2",

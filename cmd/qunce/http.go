@@ -563,6 +563,7 @@ func (ctx *handlerContext) handlePersonas(w http.ResponseWriter, r *http.Request
 		systemPrompt := strings.TrimSpace(toString(body["system_prompt"], ""))
 		agentKey := strings.TrimSpace(toString(body["agent_key"], ""))
 		agentLabel := strings.TrimSpace(toString(body["agent_label"], ""))
+		launchCommand := strings.TrimSpace(toString(body["launch_command"], ""))
 		avatarSymbol := strings.TrimSpace(toString(body["avatar_symbol"], ""))
 		avatarBG := strings.TrimSpace(toString(body["avatar_bg_color"], ""))
 		avatarText := strings.TrimSpace(toString(body["avatar_text_color"], ""))
@@ -585,6 +586,10 @@ func (ctx *handlerContext) handlePersonas(w http.ResponseWriter, r *http.Request
 		}
 		if agentKey == "" {
 			badRequest(w, "agent_key_required")
+			return
+		}
+		if launchCommand == "" {
+			badRequest(w, "launch_command_required")
 			return
 		}
 
@@ -633,7 +638,8 @@ func (ctx *handlerContext) handlePersonas(w http.ResponseWriter, r *http.Request
 			SystemPrompt:    systemPrompt,
 			AgentKey:        agentKey,
 			AgentLabel:      firstNonEmpty(agentLabel, agentKey),
-			ModelProvider:   "codex",
+			LaunchCommand:   launchCommand,
+			ModelProvider:   firstNonEmpty(agentLabel, agentKey, "custom"),
 			AvatarSymbol:    firstNonEmpty(intLimit(avatarSymbol, 1), name[:1]),
 			AvatarBGColor:   firstNonEmpty(avatarBG, "#d9e6f8"),
 			AvatarTextColor: firstNonEmpty(avatarText, "#31547e"),

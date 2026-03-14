@@ -47,6 +47,7 @@ export type PersonaSummary = {
   system_prompt: string;
   agent_key: string;
   agent_label: string;
+  launch_command: string;
   model_provider: string;
   avatar_symbol?: string;
   avatar_bg_color?: string;
@@ -60,6 +61,7 @@ export type CreatePersonaPayload = {
   system_prompt: string;
   agent_key: string;
   agent_label: string;
+  launch_command: string;
   avatar_symbol: string;
   avatar_bg_color: string;
   avatar_text_color: string;

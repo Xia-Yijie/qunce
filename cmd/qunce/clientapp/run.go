@@ -262,18 +262,19 @@ func run(ctx context.Context, logger *slog.Logger, cfg agentConfig) error {
 }
 
 type turnRequestData struct {
-	TurnID       string `json:"turn_id"`
-	ChatID       string `json:"chat_id"`
-	MessageID    string `json:"message_id"`
-	Content      string `json:"content"`
-	SenderName   string `json:"sender_name"`
-	PersonaID    string `json:"persona_id"`
-	PersonaName  string `json:"persona_name"`
-	WorkspaceDir string `json:"workspace_dir"`
-	SystemPrompt string `json:"system_prompt"`
-	AgentKey     string `json:"agent_key"`
-	AgentLabel   string `json:"agent_label"`
-	Muted        bool   `json:"muted"`
+	TurnID        string `json:"turn_id"`
+	ChatID        string `json:"chat_id"`
+	MessageID     string `json:"message_id"`
+	Content       string `json:"content"`
+	SenderName    string `json:"sender_name"`
+	PersonaID     string `json:"persona_id"`
+	PersonaName   string `json:"persona_name"`
+	WorkspaceDir  string `json:"workspace_dir"`
+	SystemPrompt  string `json:"system_prompt"`
+	AgentKey      string `json:"agent_key"`
+	AgentLabel    string `json:"agent_label"`
+	LaunchCommand string `json:"launch_command"`
+	Muted         bool   `json:"muted"`
 }
 
 type workspaceValidationRequest struct {
@@ -361,14 +362,14 @@ func (r *agentRuntime) generateTurnReply(ctx context.Context, data turnRequestDa
 	}
 
 	prompt := buildTurnPrompt(data, workspaceDir)
-	output, err := runCodexExec(ctx, workspaceDir, prompt)
+	output, err := runTurnCommand(ctx, data, workspaceDir, prompt)
 	if err != nil {
 		return fmt.Sprintf("I could not finish the reply in %s: %v", workspaceDir, err), err
 	}
 	output = strings.TrimSpace(output)
 	r.logger.Info("generated turn reply", "turn_id", data.TurnID, "output", output)
 	if output == "" {
-		return "I could not produce a reply.", errors.New("empty codex output")
+		return "I could not produce a reply.", errors.New("empty launch command output")
 	}
 	return output, nil
 }
@@ -407,8 +408,8 @@ func buildTurnPrompt(data turnRequestData, workspaceDir string) string {
 	return builder.String()
 }
 
-func runCodexExec(ctx context.Context, workspaceDir, prompt string) (string, error) {
-	outputFile, err := os.CreateTemp("", "qunce-codex-output-*.txt")
+func runTurnCommand(ctx context.Context, data turnRequestData, workspaceDir, prompt string) (string, error) {
+	outputFile, err := os.CreateTemp("", "qunce-agent-output-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("create temp output file: %w", err)
 	}
@@ -422,24 +423,23 @@ func runCodexExec(ctx context.Context, workspaceDir, prompt string) (string, err
 	execCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	args := []string{
-		"exec",
-		"--skip-git-repo-check",
-		"--color", "never",
-		"-C", workspaceDir,
-		"--output-last-message", outputPath,
-		"-",
-	}
-	cmd, err := buildCodexCommand(execCtx, args...)
+	commandLine := strings.TrimSpace(data.LaunchCommand)
+	cmd, err := buildLaunchCommand(execCtx, commandLine, map[string]string{
+		"workspace_dir": workspaceDir,
+		"output_path":   outputPath,
+		"prompts":       prompt,
+	})
 	if err != nil {
 		return "", err
 	}
 	cmd.Dir = workspaceDir
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = buildLaunchEnv(data.AgentKey)
 	configureChildProcess(cmd)
 
+	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
@@ -448,19 +448,21 @@ func runCodexExec(ctx context.Context, workspaceDir, prompt string) (string, err
 		}
 		errText := strings.TrimSpace(stderr.String())
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return "", fmt.Errorf("codex timed out after 2 minutes")
+			return "", fmt.Errorf("launch command timed out after 2 minutes")
 		}
 		if errText == "" {
 			errText = err.Error()
 		}
-		return "", fmt.Errorf("codex exec failed: %s", errText)
+		return "", fmt.Errorf("launch command failed: %s", errText)
 	}
 
-	raw, err := os.ReadFile(outputPath)
-	if err != nil {
-		return "", fmt.Errorf("read codex output: %w", err)
+	if output, err := readCodexOutputFile(outputPath); err == nil && output != "" {
+		return output, nil
 	}
-	return string(raw), nil
+	if output := strings.TrimSpace(stdout.String()); output != "" {
+		return output, nil
+	}
+	return "", errors.New("empty launch command output")
 }
 
 func readCodexOutputFile(path string) (string, error) {
@@ -471,18 +473,48 @@ func readCodexOutputFile(path string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
-func buildCodexCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
-	for _, candidate := range defaultCodexCommandCandidates() {
-		if resolved, err := exec.LookPath(candidate); err == nil {
-			return exec.CommandContext(ctx, resolved, args...), nil
-		}
+func buildLaunchCommand(ctx context.Context, commandLine string, replacements map[string]string) (*exec.Cmd, error) {
+	commandLine = strings.TrimSpace(commandLine)
+	if commandLine == "" {
+		return nil, errors.New("launch command is empty")
 	}
-
-	return nil, errors.New("codex executable not found")
+	for key, value := range replacements {
+		commandLine = strings.ReplaceAll(commandLine, "{"+key+"}", value)
+	}
+	if goruntime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", commandLine), nil
+	}
+	return exec.CommandContext(ctx, "sh", "-lc", commandLine), nil
 }
 
-func defaultCodexCommandCandidates() []string {
-	return []string{"codex"}
+func buildLaunchEnv(proxyURL string) []string {
+	base := os.Environ()
+	filtered := make([]string, 0, len(base)+6)
+	for _, entry := range base {
+		name := entry
+		if index := strings.IndexByte(entry, '='); index >= 0 {
+			name = entry[:index]
+		}
+		switch strings.ToUpper(name) {
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+			continue
+		}
+		switch strings.ToLower(name) {
+		case "http_proxy", "https_proxy", "all_proxy", "no_proxy":
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return filtered
+	}
+
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		filtered = append(filtered, name+"="+proxyURL)
+	}
+	return filtered
 }
 
 func (r *agentRuntime) handleWorkspaceValidation(ctx context.Context, message agentcore.RawEnvelope) {
